@@ -79,6 +79,17 @@ Out of scope:
 8. Deployment artifacts: `docker-compose.yml`, `Dockerfile.airflow`, `Dockerfile.spark`,
    `dags/`, `spark-apps/`, `provisioning/`, `.env.example`.
 
+## Reporting standard
+
+Every report produced for the POC (under `reports/`) MUST ship a human-readable HTML
+version alongside its markdown source:
+
+- **Naming**: `report.md` ↔ `report.html` (same base name).
+- **Self-contained**: inline CSS only; no external assets; opens in any browser.
+- **Parity**: the HTML faithfully reflects the markdown content (sections, tables,
+  code blocks, ASCII diagrams).
+- **Producer**: the agent that authors a report produces both formats.
+
 ## Timeline (high level)
 
 1. Define the lineage model (blocks everything else).

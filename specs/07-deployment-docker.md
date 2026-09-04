@@ -19,7 +19,7 @@ specs 02 and 07.
 
 ## 1. Container inventory
 
-13 services. Images are pinned; custom images are built from the Dockerfiles in the
+16 services. Images are pinned; custom images are built from the Dockerfiles in the
 repo root.
 
 | # | Service | Image (pinned) | Purpose | Host port(s) | Internal port(s) | Volumes (named + bind) | Key env vars |
@@ -27,7 +27,7 @@ repo root.
 | 1 | `mysql` | `mysql:8.0` | Source OLTP DB; binlog source for CDC | 13306 | 3306 | `mysql-data:/var/lib/mysql`; `./provisioning/init-mysql.sql:/docker-entrypoint-initdb.d/01-init.sql:ro`; `./provisioning/cdc.cnf:/etc/mysql/conf.d/cdc.cnf:ro` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE=shop`, `MYSQL_USER` (default `poc`), `MYSQL_PASSWORD` |
 | 2 | `kafka` | `confluentinc/cp-kafka:7.9.0` | KRaft broker + controller (no ZooKeeper); CDC topic store | 9092 | 9092 (PLAINTEXT), 9093 (controller), 29092 (PLAINTEXT_HOST) | `kafka-data:/var/lib/kafka/data` | `CLUSTER_ID`, `KAFKA_PROCESS_ROLES=broker,controller`, `KAFKA_ADVERTISED_LISTENERS`, `KAFKA_AUTO_CREATE_TOPICS_ENABLE=false`, `KAFKA_LOG_RETENTION_HOURS=168` |
 | 3 | `schema-registry` | `confluentinc/cp-schema-registry:7.9.0` | Avro schema registry; subjects `{topic}-key/-value` feed the lineage schema facet | 8081 | 8081 | — | `SCHEMA_REGISTRY_HOST_NAME=schema-registry`, `SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081`, `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092` |
-| 4 | `connect` | `debezium/connect:3.6.0` | Debezium MySQL source connectors (`shop-orders`, `shop-customers`) | 8083 | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, `GROUP_ID=1`, storage topics, Avro converters, registry URL |
+| 4 | `connect` | `data-lineage-poc/connect:3.6.2.Final` (build `Dockerfile.connect`) | Debezium MySQL source connectors (`shop-orders`, `shop-customers`); emits OpenLineage to Marquez | 8083 | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, `GROUP_ID=1`, storage topics, Avro converters, registry URL; `openlineage.integration.*` + SMT in connector config (spec 03) |
 | 5 | `airflow-db` | `postgres:16` | Airflow metadata database | — | 5432 | `airflow-db-data:/var/lib/postgresql/data` | `POSTGRES_USER=airflow`, `POSTGRES_PASSWORD` (default `airflow`), `POSTGRES_DB=airflow` |
 | 6 | `airflow-webserver` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | Airflow UI + REST; submits Spark apps (spark-submit client only) | 8080 | 8080 | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | `AIRFLOW__CORE__EXECUTOR=LocalExecutor`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077`, `AIRFLOW__OPENLINEAGE__TRANSPORT` |
 | 7 | `airflow-scheduler` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | DAG parsing + task scheduling | — | — | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | same as webserver (compose anchor `*airflow-env`) |
@@ -37,6 +37,9 @@ repo root.
 | 11 | `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | S3-compatible object storage; Iceberg warehouse | 9000 (S3), 9002 (console) | 9000 (S3), 9001 (console) | `minio-data:/data` | `MINIO_ROOT_USER` (default `pocadmin`), `MINIO_ROOT_PASSWORD` |
 | 12 | `mc` | `minio/mc:latest` | **One-shot** gate: creates bucket `poc-warehouse` | — | — | `./provisioning/mc-init.sh:/provisioning/mc-init.sh:ro` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` |
 | 13 | `provision` | `curlimages/curl:8.10.1` | **One-shot** gate: registers connectors `shop-orders` / `shop-customers` via Connect REST | — | — | `./provisioning/register-connectors.sh:/provisioning/register-connectors.sh:ro` | — |
+| 14 | `marquez-db` | `postgres:14` | OpenLineage backend metadata DB | — | 5432 | `marquez-db-data:/var/lib/postgresql/data`; `./provisioning/init-marquez.sql:/docker-entrypoint-initdb.d/01-marquez.sql:ro` | `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD=marquez` |
+| 15 | `marquez` | `marquezproject/marquez:0.50.0` | OpenLineage backend (collects OL events; Debezium posts here) | 5000 (API), 5001 (admin) | 5000 (API), 5001 (admin) | — | `MARQUEZ_PORT=5000`, `MARQUEZ_ADMIN_PORT=5001`, `POSTGRES_HOST=marquez-db`, `POSTGRES_DB=marquez`, `POSTGRES_USER=marquez`, `POSTGRES_PASSWORD=marquez` |
+| 16 | `marquez-web` | `marquezproject/marquez-web:0.50.0` | Marquez UI (lineage graph) | 3000 | 3000 | — | `MARQUEZ_HOST=marquez`, `MARQUEZ_PORT=5000` |
 
 Notes:
 
@@ -48,6 +51,9 @@ Notes:
   `spark-defaults.conf`; the MinIO credentials there are hardcoded POC values that
   MUST match `.env.example` (Spark does not expand `${VAR}` in spark-defaults.conf).
 - `mc` and `provision` run once (`restart: "no"`) and exit 0.
+- `connect` bakes the Debezium OpenLineage core libs (`3.6.2.Final`) and
+  `/kafka/openlineage.yml` (HTTP transport → Marquez) via `Dockerfile.connect`; the
+  connectors enable `openlineage.integration.*` and the OpenLineage SMT (spec 03).
 
 ## 2. Service topology
 
@@ -99,15 +105,21 @@ Control flow: `airflow-webserver/scheduler → spark-master → spark-worker`.
 One-shot gates: `provision` (connectors, after connect+kafka healthy) and `mc`
 (bucket `poc-warehouse`, after minio healthy).
 
+OpenLineage side (CDC hop lineage, spec 03):
+
+    connect ──OL HTTP (http://marquez:5000/api/v1/lineage)──▶ marquez (API :5000, admin :5001)
+                                                                      │
+                                                      marquez-web (UI :3000) ── lineage graph
+
 ## 3. Network / ports / volumes
 
 ### Network
 
-- One bridge network: `lineage-poc`. All 13 services attach to it.
+- One bridge network: `lineage-poc`. All 16 services attach to it.
 - Compose project name `data-lineage-poc` = lineage `deployment` facet `instance_id`
   (spec 02). Service names are the DNS identities inside the network.
 
-### Named volumes (5)
+### Named volumes (6)
 
 | Volume | Mounted at | Used by |
 |---|---|---|
@@ -116,6 +128,7 @@ One-shot gates: `provision` (connectors, after connect+kafka healthy) and `mc`
 | `minio-data` | `/data` | minio |
 | `airflow-db-data` | `/var/lib/postgresql/data` | airflow-db |
 | `nessie-data` | `/data` | nessie (RocksDB catalog store) |
+| `marquez-db-data` | `/var/lib/postgresql/data` | marquez-db |
 
 ### Bind mounts
 
@@ -127,6 +140,7 @@ One-shot gates: `provision` (connectors, after connect+kafka healthy) and `mc`
 | `./provisioning/cdc.cnf` | `/etc/mysql/conf.d/cdc.cnf` | mysql | ro |
 | `./provisioning/mc-init.sh` | `/provisioning/mc-init.sh` | mc | ro |
 | `./provisioning/register-connectors.sh` | `/provisioning/register-connectors.sh` | provision | ro |
+| `./provisioning/init-marquez.sql` | `/docker-entrypoint-initdb.d/01-marquez.sql` | marquez-db | ro |
 
 `./spark-apps` is shared so the Airflow spark-submit client (webserver/scheduler) and
 the Spark driver/executors (master/worker) all see the same app files in
@@ -146,6 +160,9 @@ deploy-mode cluster.
 | nessie | 19120 | 19120 | Nessie REST API |
 | minio | 9000 | 9000 | S3 API |
 | minio | 9002 | 9001 | MinIO console |
+| marquez | 5000 | 5000 | OpenLineage API (Debezium posts OL events) |
+| marquez | 5001 | 5001 | Marquez admin (/healthcheck) |
+| marquez-web | 3000 | 3000 | Marquez UI (lineage graph) |
 
 **This table resolves the 8080/8081/8083/9000/9001/9002 collision set:**
 
@@ -157,6 +174,7 @@ deploy-mode cluster.
 - **9000** — MinIO S3 keeps host 9000. The GHCR Nessie image ships no web UI (the
   Docker Hub image's UI on 9000 was the collision risk), so no collision.
 - **9001/9002** — MinIO console is internal 9001, remapped to host 9002.
+- **3000 / 5000 / 5001** — Marquez UI / API / admin; free on the host, no collisions.
 
 ## 5. Env vars per service
 
@@ -177,7 +195,7 @@ Cross-service wiring values. Secrets come from `.env` (template: `.env.example`)
 | connect | `CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL` / `CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` | registry for Avro |
 | airflow-* | `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` | `postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-db:5432/airflow` | metadata DB |
 | airflow-* | `AIRFLOW_CONN_SPARK_DEFAULT` | `spark://spark-master:7077` | SparkSubmitOperator master |
-| airflow-* | `AIRFLOW__OPENLINEAGE__TRANSPORT` | `{"type":"console"}` | OL sink; Marquez optional (spec 04) |
+| airflow-* | `AIRFLOW__OPENLINEAGE__TRANSPORT` | `{"type":"console"}` | stays console until the Airflow/Spark hops land (ticket T-01) |
 | airflow-* | `AIRFLOW__CORE__FERNET_KEY` / `AIRFLOW__WEBSERVER__SECRET_KEY` | `${FERNET_KEY}` / `${AIRFLOW__WEBSERVER__SECRET_KEY}` | secrets (from `.env`) |
 | airflow-* | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | `${AIRFLOW_USERNAME:-admin}` / `${AIRFLOW_PASSWORD:-admin}` | UI login |
 | nessie | `NESSIE_VERSION_STORE_TYPE` | `ROCKSDB` | catalog metadata persisted to the named volume |
@@ -186,6 +204,10 @@ Cross-service wiring values. Secrets come from `.env` (template: `.env.example`)
 | minio | `MINIO_REGION` | `us-east-1` | region expected by S3 clients (S3FileIO) |
 | mc | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | same | bucket creation credentials |
 | spark-master / spark-worker | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `${MINIO_ROOT_USER:-pocadmin}` / `${MINIO_ROOT_PASSWORD}` | S3 credentials for Hadoop S3A components; Nessie URI + MinIO endpoint baked in `spark-defaults.conf` |
+| marquez-db | `POSTGRES_USER` / `POSTGRES_PASSWORD` | `postgres` / `marquez` | creates the DB; `init-marquez.sql` creates the `marquez` role + database |
+| marquez | `POSTGRES_HOST` / `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | `marquez-db` / `marquez` / `marquez` / `marquez` | JDBC URL to the metadata DB |
+| marquez | `MARQUEZ_PORT` / `MARQUEZ_ADMIN_PORT` | `5000` / `5001` | API + admin ports |
+| marquez-web | `MARQUEZ_HOST` / `MARQUEZ_PORT` | `marquez` / `5000` | UI proxies to the API |
 
 **Note:** `spark-defaults.conf` hardcodes the POC MinIO credentials (`pocadmin` /
 `minio-poc-secret`) because Spark does not expand `${VAR}` in that file. They MUST
@@ -197,6 +219,9 @@ Secrets referenced from `.env.example`: `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`,
 `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW_USERNAME`, `AIRFLOW_PASSWORD`,
 `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`.
 
+Marquez DB credentials are hardcoded POC values (`marquez` / `marquez`, matching
+`init-marquez.sql`); they are not in `.env.example`.
+
 ## 6. Startup order / depends_on
 
 Dependency chain with healthchecks. `docker compose up -d --build` starts everything;
@@ -206,7 +231,10 @@ the two one-shot gates run once (`restart: "no"`) and exit 0.
 mysql ──(no deps)── healthcheck: mysqladmin ping
 kafka ──(no deps)── healthcheck: kafka-topics --list
 schema-registry ──depends_on kafka (healthy)── healthcheck: curl /subjects
-connect ──depends_on kafka + schema-registry (healthy)── healthcheck: curl /connectors
+connect ──depends_on kafka + schema-registry + marquez (healthy)── healthcheck: curl /connectors
+marquez-db ──(no deps)── healthcheck: pg_isready
+marquez ──depends_on marquez-db (healthy)── healthcheck: /dev/tcp localhost:5001
+marquez-web ──depends_on marquez (healthy)── healthcheck: /dev/tcp localhost:3000
 provision (one-shot) ──depends_on connect + kafka (healthy)── registers shop-orders, shop-customers
 airflow-db ──(no deps)── healthcheck: pg_isready
 airflow-webserver ──depends_on airflow-db (healthy)── healthcheck: curl /health
@@ -236,6 +264,9 @@ Notes:
 - Airflow services do not depend on `kafka` / `connect`; topics are only needed at
   Spark-run time.
 - `mysql` init SQL runs only on first boot (empty `mysql-data` volume).
+- `connect` gates on `marquez` healthy so the OpenLineage backend is up before the
+  connectors start emitting events; `marquez` gates on `marquez-db` (its
+  `init-marquez.sql` runs on first boot).
 
 ## 7. Bring-up + validation runbook
 
@@ -253,8 +284,9 @@ docker compose up -d --build
 docker compose ps
 #    expect: mysql, kafka, schema-registry, connect, airflow-db,
 #            airflow-webserver, airflow-scheduler, spark-master,
-#            spark-worker, nessie, minio  -> healthy
-#            mc, provision                -> exited (0)
+#            spark-worker, nessie, minio, marquez-db, marquez,
+#            marquez-web  -> healthy
+#            mc, provision  -> exited (0)
 
 # 4. Connectors registered and RUNNING
 curl http://localhost:8083/connectors
@@ -266,20 +298,33 @@ curl http://localhost:8083/connectors/shop-orders/status
 docker compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list
 #    expect: mysql.shop.orders, mysql.shop.customers, mysql-schema-history, connect-*
 
-# 6. Trigger DAGs in the Airflow UI (http://localhost:8080, admin/admin)
-#    load_orders      -> tasks spark_load_orders + capture_snapshot COMPLETE
-#    load_customers   -> tasks spark_load_customers + capture_snapshot COMPLETE
+# 6. PROVE DATA IS CAPTURED: insert a row into MySQL, read it back from the topic
+docker compose exec mysql sh -c \
+  'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" shop -e "INSERT INTO orders (customer_id, product_id, quantity, unit_price, status) VALUES (1, 42, 2, 9.99, \"NEW\");"'
+docker compose exec kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 --topic mysql.shop.orders \
+  --from-beginning --max-messages 1 --timeout-ms 15000
+#    expect: the new row as a CDC event (snapshot + binlog change)
 
-# 7. Nessie catalog
+# 7. PROVE LINEAGE IS VISIBLE: Marquez (OpenLineage backend)
+#    UI:  http://localhost:3000  -> search "mysql.shop.orders" (or job "mysql.0")
+#         lineage: mysql://mysql:3306/shop.orders
+#                   -> debezium.shop-orders:mysql.0
+#                   -> kafka://kafka:9092/mysql.shop.orders
+#         run state RUNNING; schema facet shows the columns
+#    API (raw events):
+curl -s "http://localhost:5000/api/v1/events/lineage?limit=5"
+#    expect: JSON events with eventType START/RUNNING, job debezium.shop-orders:mysql.0
+
+# 8. Nessie catalog
 curl http://localhost:19120/api/v2/trees/main
 #    expect: default branch "main"; namespace poc; table poc.shop_orders
 
-# 8. MinIO warehouse (console http://localhost:9002, pocadmin / minio-poc-secret)
+# 9. MinIO warehouse (console http://localhost:9002, pocadmin / minio-poc-secret)
 #    expect: bucket poc-warehouse with parquet under poc/shop_orders/
 
-# 9. (Optional) Marquez OpenLineage sink
-#    currently console transport (AIRFLOW__OPENLINEAGE__TRANSPORT={"type":"console"},
-#    spark.openlineage.transport.type=console); switch to http transport + URL to enable
+# 10. Airflow/Spark hops: NOT part of this phase (CDC hop only)
+#     their OL transports stay console until implemented (ticket T-01)
 ```
 
 Acceptance criteria map to the lineage model (spec 02): topic names
@@ -294,6 +339,9 @@ captured by `capture_snapshot` closes the version-marker chain.
   `schema-registry:8081`, `spark://spark-master:7077`, `nessie:19120/api/v2`,
   `s3://poc-warehouse/`). All match spec 02.
 - One-shot gates are not lineage jobs; they are deployment bootstrap steps.
+- Marquez is the OpenLineage collector/UI, not a lineage model entity; the emitted job
+  identity `debezium.{connector}:mysql.0` and dataset namespaces (`mysql://mysql:3306`,
+  `kafka://kafka:9092`) match spec 02.
 
 ## Alternatives considered
 
