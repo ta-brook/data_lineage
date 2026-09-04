@@ -12,6 +12,47 @@ is codified in the `session-workflow` skill (`.opencode/skills/session-workflow/
 
 ---
 
+## 0. Project status at a glance
+
+**Overall status: design phase complete — ready for execution.**
+
+The full pipeline `MySQL → Debezium → Kafka → Airflow → Spark → Iceberg (Nessie + MinIO)`
+is **authored and committed** (16 docker-compose services), but the stack has **not been
+executed or tested** yet.
+
+### What's done (all design work)
+
+| Area | Status |
+|---|---|
+| Specs 00–07 | Complete; all 13 open questions (OQ1–OQ13) resolved |
+| Docker-compose topology (16 services) | Authored, ports/env/healthchecks pinned |
+| DAGs + Spark apps | Authored (`load_orders`, `load_customers`; from_avro UDF, MERGE upsert, `capture_snapshot`) |
+| Lineage wiring | **All three hops emit OpenLineage to Marquez** (Debezium CDC native OL, Airflow parent runs, Spark child runs) |
+| Reviews | 3 completed: architecture (fix applied), CDC hop (**ready to test**), Airflow→Spark→Iceberg hop (**ready to test**) |
+| Ticket board | 6 closed, 2 open (EXE-01, CDC-01) — synced to GitHub |
+
+### Key design decisions locked in
+
+- Spark = transform stage; Airflow = pure orchestration (SparkSubmitOperator, cluster mode)
+- Lineage: `airflow:{dag}.{task}` parent → `spark:{app}` child, joined via parentRun facet
+- Dataset namespaces: Kafka `kafka://kafka:9092`, Iceberg physical `nessie.poc`/`shop_orders`
+  (logical `poc.shop_orders` canonical)
+- Version markers: binlog position → Kafka offset → kafkaOffset facet → Iceberg snapshot id
+  (in Airflow run metadata)
+- Precision honesty: declarative SQL = exact; from_avro UDF = inferred
+
+### Remaining work (next phase — EXECUTION)
+
+1. **EXE-01**: `cp .env.example .env` → `docker compose up -d --build` → run the spec 07 §7
+   runbook (16 services healthy, `mc`/`provision` exit 0)
+2. **CDC-01**: insert a row in MySQL → read from topic → verify lineage in Marquez UI (:3000)
+3. Bring-up validations from the latest review (parentRun join, kafkaOffset facet,
+   healthcheck tooling, etc. — see section 3)
+4. One known script bug: `sync-tickets.ps1` aborts on `gh issue close` under strict error
+   handling (workaround documented in section 3)
+
+---
+
 ## 1. Project status overview
 
 The POC is a **runnable docker-compose stack**:
