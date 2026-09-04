@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Lineage POC — CDC OpenLineage / Marquez Integration Review</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a2e;
+    --muted: #555555;
+    --accent: #1f4e79;
+    --accent2: #2e75b6;
+    --border: #d0d7de;
+    --code-bg: #f2f4f7;
+    --pre-bg: #f6f8fa;
+    --th-bg: #eef2f7;
+    --zebra: #f9fafb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 {
+    font-size: 1.9rem;
+    line-height: 1.25;
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 0.4rem;
+    margin: 0 0 1.2rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+    margin: 2.4rem 0 0.9rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+    color: var(--accent2);
+    margin: 1.8rem 0 0.6rem;
+  }
+  p { margin: 0.6rem 0; }
+  ul, ol { padding-left: 1.6rem; margin: 0.6rem 0; }
+  li { margin: 0.35rem 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.83rem;
+    line-height: 1.4;
+    background: var(--pre-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.9rem 0 1.4rem;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.65rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--th-bg); font-weight: 650; }
+  tr:nth-child(even) td { background: var(--zebra); }
+  .meta {
+    background: var(--pre-bg);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1.1rem;
+    margin: 0 0 1.4rem;
+  }
+  .meta p { margin: 0.35rem 0; }
+  .verdict {
+    background: #f0f7f0;
+    border: 1px solid #b5d4b5;
+    border-left: 4px solid #1e7d32;
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1.1rem;
+    margin: 0.9rem 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>Data Lineage POC — CDC OpenLineage / Marquez Integration Review</h1>
+
+<div class="meta">
+  <p><strong>Reviewer:</strong> <code>data-architecture</code> (standing in for <code>.opencode/agents/data-architecture.md</code>)</p>
+  <p><strong>Date:</strong> 2026-09-04</p>
+  <p><strong>Scope:</strong> the just-implemented <code>MySQL -&gt; Debezium -&gt; Kafka</code> hop with <strong>native OpenLineage emission into Marquez</strong> — Connect image, OpenLineage client config, connector OpenLineage properties, the Marquez stack, and the reconciliation of specs 02/03/07 against the artifacts and the Debezium 3.6 OpenLineage reference (<a href="https://debezium.io/documentation/reference/stable/integrations/openlineage.html">docs</a>).</p>
+  <p><strong>Method:</strong> read-only audit. Every claim cites file + section/line. Nothing was run, built, or tested. Continuity: this review supersedes the CDC-hop findings of <code>reports/architecture-review.md</code> (prior verdict "fix before execution"), which this hop was designed to address.</p>
+</div>
+
+<hr>
+
+<h2>0. Verdict (summary)</h2>
+
+<div class="verdict">
+  <p><strong>Verdict: READY TO TEST</strong> — for the CDC hop. The wiring is correct against both the lineage model and the Debezium reference: every OpenLineage property, the job/dataset identity mapping, the client transport, the dependency archive, and the Marquez stack are internally consistent and match the reference docs. The two prior CDC blockers are resolved: a queryable lineage sink now exists (Marquez, spec 07 rows 14–16) and the <code>database.server.name</code> redundancy is gone (register-connectors.sh uses <code>topic.prefix</code> only). What remains is a short <strong>bring-up validation checklist</strong> (§6) — the SMT × Avro schema-representation check, Marquez healthcheck tooling, and OL-client ↔ Marquez spec compatibility — plus two documentation reconciliations (§5). None of these require a design change before the stack is exercised.</p>
+</div>
+
+<hr>
+
+<h2>1. Per-area findings</h2>
+
+<h3>1.1 Connect image (<code>Dockerfile.connect</code>)</h3>
+
+<table>
+  <tr><th>Check</th><th>Finding</th><th>Evidence</th></tr>
+  <tr><td>Base image</td><td><code>FROM debezium/connect:3.6.2.Final</code></td><td><code>Dockerfile.connect:5</code></td></tr>
+  <tr><td>OL core libs source</td><td>Maven Central <code>debezium-openlineage-core/3.6.2.Final/debezium-openlineage-core-3.6.2.Final-libs.tar.gz</code></td><td><code>Dockerfile.connect:12</code>; identical URL to the reference doc's Required Dependencies link</td></tr>
+  <tr><td>Extract target</td><td><code>tar -xzf ... -C /kafka/connect/debezium-openlineage-core --strip-components=1</code> — a plugin subdir of the image's <code>/kafka/connect</code> plugin.path</td><td><code>Dockerfile.connect:14–15</code>; reference: "Extract the contents of the archive into the Debezium plug-in directories"</td></tr>
+  <tr><td>Client config baked</td><td><code>COPY provisioning/openlineage.yml /kafka/openlineage.yml</code></td><td><code>Dockerfile.connect:21</code>; reference lists <code>/kafka/openlineage.yml</code> as a common config location</td></tr>
+  <tr><td>Version lockstep</td><td>Base image tag and OL core version are both <code>3.6.2.Final</code></td><td><code>Dockerfile.connect:5</code> vs <code>Dockerfile.connect:12</code></td></tr>
+</table>
+
+<p>Correct. One nuance: the OL libs are resolved at <strong>build time</strong> via <code>ARG OL_CORE_URL</code> (<code>Dockerfile.connect:12</code>) — the lockstep with the base image is enforced only by the pin staying in sync in that one file (see R3).</p>
+
+<h3>1.2 OpenLineage client config (<code>provisioning/openlineage.yml</code>)</h3>
+
+<table>
+  <tr><th>Check</th><th>Finding</th><th>Evidence</th></tr>
+  <tr><td>Transport</td><td><code>type: http</code>, <code>url: http://marquez:5000</code>, <code>endpoint: /api/v1/lineage</code></td><td><code>provisioning/openlineage.yml:6–9</code></td></tr>
+  <tr><td>Matches reference</td><td>Same <code>transport.type/url/endpoint</code> structure as the reference client example (auth is optional there and correctly omitted for an internal stack)</td><td>reference "Configuring the OpenLineage client"</td></tr>
+  <tr><td>Target is the right port</td><td>Marquez API listens on 5000, admin on 5001</td><td><code>docker-compose.yml:308–309</code>; <code>specs/07-deployment-docker.md:41</code></td></tr>
+</table>
+
+<p>Correct.</p>
+
+<h3>1.3 Connector config (<code>provisioning/register-connectors.sh</code>)</h3>
+
+<p>Both payloads (<code>shop-orders</code> and <code>shop-customers</code>) carry the full OpenLineage block, verified property-by-property against the reference property table:</p>
+
+<table>
+  <tr><th>Property</th><th>shop-orders</th><th>shop-customers</th><th>Reference default / status</th></tr>
+  <tr><td><code>openlineage.integration.enabled=true</code></td><td><code>register-connectors.sh:74</code></td><td><code>:106</code></td><td>Required, default <code>false</code></td></tr>
+  <tr><td><code>openlineage.integration.config.file.path=/kafka/openlineage.yml</code></td><td><code>:75</code></td><td><code>:107</code></td><td>Required</td></tr>
+  <tr><td><code>openlineage.integration.job.namespace=debezium.shop-orders</code> / <code>debezium.shop-customers</code></td><td><code>:76</code></td><td><code>:108</code></td><td>Default = <code>topic.prefix</code>; override used deliberately</td></tr>
+  <tr><td><code>openlineage.integration.job.description=...</code></td><td><code>:77</code></td><td><code>:109</code></td><td>Optional</td></tr>
+  <tr><td><code>openlineage.integration.job.tags=environment=dev,team=data-platform,hop=cdc</code></td><td><code>:78</code></td><td><code>:110</code></td><td>Format <code>key=value,key=value</code> matches reference</td></tr>
+  <tr><td><code>openlineage.integration.job.owners=Data Platform=owner</code></td><td><code>:79</code></td><td><code>:111</code></td><td>Format <code>Name=role</code> matches reference</td></tr>
+  <tr><td><code>openlineage.integration.dataset.kafka.bootstrap.servers=kafka:9092</code></td><td><code>:80</code></td><td><code>:112</code></td><td>Source connectors: optional, defaults to <code>schema.history.internal.kafka.bootstrap.servers</code></td></tr>
+  <tr><td><code>transforms=openlineage</code> + <code>transforms.openlineage.type=io.debezium.transforms.openlineage.OpenLineage</code></td><td><code>:81–82</code></td><td><code>:113–114</code></td><td>Matches reference SMT config exactly</td></tr>
+  <tr><td><code>schema.history.internal.kafka.bootstrap.servers=kafka:9092</code> (enables output dataset lineage)</td><td><code>:66</code></td><td><code>:98</code></td><td>Reference troubleshooting: required for output datasets</td></tr>
+  <tr><td><code>topic.prefix=mysql</code> (source of the job name <code>mysql.0</code> + output dataset names)</td><td><code>:73</code></td><td><code>:105</code></td><td>Reference: job name = <code>topic.prefix</code> + task ID</td></tr>
+  <tr><td>No <code>database.server.name</code> (removed in Debezium 3.x; prior review R4 resolved)</td><td colspan="2">comment <code>:10–13</code>, <code>:44–46</code></td><td>fixed since <code>reports/architecture-review.md:46</code></td></tr>
+</table>
+
+<p>Correct. <code>database.server.id</code> 223345/223346 ≠ MySQL <code>server-id</code> 223344 (<code>register-connectors.sh:62,94</code> vs spec 07 §6 note) — required so the connector registers as a valid replica client. The script is POSIX-sh + curl, compatible with the <code>curlimages/curl:8.10.1</code> container's Alpine <code>sh</code> (<code>docker-compose.yml:364–376</code>).</p>
+
+<h3>1.4 Marquez stack (<code>docker-compose.yml</code> + <code>provisioning/init-marquez.sql</code>)</h3>
+
+<table>
+  <tr><th>Check</th><th>Finding</th><th>Evidence</th></tr>
+  <tr><td><code>marquez-db</code></td><td><code>postgres:14</code>, <code>marquez-db-data</code> volume, <code>init-marquez.sql</code> mounted at <code>/docker-entrypoint-initdb.d/01-marquez.sql</code>, <code>pg_isready</code> healthcheck</td><td><code>docker-compose.yml:288–302</code>; <code>specs/07-deployment-docker.md:40</code></td></tr>
+  <tr><td>Init SQL</td><td><code>CREATE ROLE marquez ...; CREATE DATABASE marquez OWNER marquez;</code> runs on first boot</td><td><code>provisioning/init-marquez.sql:4–5</code>; <code>specs/07-deployment-docker.md:266–269</code></td></tr>
+  <tr><td><code>marquez</code></td><td><code>marquezproject/marquez:0.50.0</code>, API :5000 / admin :5001, <code>MARQUEZ_PORT</code>/<code>MARQUEZ_ADMIN_PORT</code>, <code>POSTGRES_*</code>=marquez, depends on marquez-db healthy, <code>/dev/tcp</code> 5001 healthcheck</td><td><code>docker-compose.yml:304–326</code>; <code>specs/07-deployment-docker.md:41,209</code></td></tr>
+  <tr><td><code>marquez-web</code></td><td><code>marquezproject/marquez-web:0.50.0</code>, :3000, <code>MARQUEZ_HOST=marquez</code>/<code>PORT=5000</code>, depends on marquez healthy, <code>/dev/tcp</code> 3000 healthcheck</td><td><code>docker-compose.yml:328–344</code>; <code>specs/07-deployment-docker.md:42,210</code></td></tr>
+  <tr><td><code>connect</code> gates on Marquez</td><td><code>depends_on: marquez: condition: service_healthy</code> alongside kafka + schema-registry</td><td><code>docker-compose.yml:116–122</code>; <code>specs/07-deployment-docker.md:234,267–268</code></td></tr>
+  <tr><td>Ports 5000/5001/3000</td><td>Used only by marquez/marquez-web in the file; spec declares them free on the host</td><td><code>docker-compose.yml:308–309,332</code>; <code>specs/07-deployment-docker.md:177</code></td></tr>
+</table>
+
+<p>Correct. Version <code>0.50.0</code> is real and current: released 2024-10-24, tagged <code>marquezproject/marquez:0.50.0</code>, listed as the <code>RECOMMENDED</code> build, compatible with the OpenLineage 2-0-2 spec (Marquez releases / CHANGELOG), and it recommends Postgres 14 — which is exactly what <code>marquez-db</code> pins. Two notes: (a) <code>marquez-db</code> sets no <code>POSTGRES_DB</code> (<code>docker-compose.yml:291–293</code>), so the <code>marquez</code> database exists only via the first-boot init script — consistent with spec 07 §1 row 14, which likewise lists only <code>POSTGRES_USER</code>/<code>POSTGRES_PASSWORD</code>; (b) the <code>marquez</code>/<code>marquez-web</code> healthchecks assume <code>bash</code> in the images (see R2).</p>
+
+<h3>1.5 Spec 02 reconciliation (lineage model)</h3>
+
+<p>The canonical model was reconciled to the native Debezium OpenLineage identity, and the artifacts now match it:</p>
+
+<ul>
+  <li><strong>Job identity</strong> <code>debezium.{connector}:{topic.prefix}.{task_id}</code> (e.g. <code>debezium.shop-orders:mysql.0</code>) — <code>specs/02-lineage-model.md:36–37</code> and the rationale at <code>:44–51</code> (job name derived from <code>topic.prefix</code> + task id, <strong>not configurable</strong>; connector name carried in the job <strong>namespace</strong>; both connectors share <code>topic.prefix=mysql</code> so the namespace disambiguates). This is exactly the reference mapping: job name = <code>topic.prefix</code> + task ID (<code>inventory.0</code>), namespace = <code>openlineage.integration.job.namespace</code>, default <code>topic.prefix</code>. With <code>tasks.max=1</code> the task id is <code>0</code>, so both connectors emit <code>mysql.0</code> in different namespaces — exactly as spec 02 predicts.</li>
+  <li><strong>Dataset namespaces</strong> <code>mysql://mysql:3306</code> / <code>shop.orders</code> and <code>kafka://kafka:9092</code> / <code>mysql.shop.orders</code> — <code>specs/02-lineage-model.md:20</code>, and <code>:25–30</code> asserting these are "the physical OpenLineage identities emitted by the Debezium source connector." The reference confirms the formats: input datasets per database (<code>postgres://host:port</code> / <code>schema.table</code> pattern; MySQL: <code>mysql://host:port</code> / <code>db.table</code>) and source-connector output datasets <code>kafka://bootstrap-server:port</code> / <code>topic-prefix.schema.table</code> (MySQL has no schema → <code>mysql.shop.orders</code>).</li>
+  <li><strong>Run events</strong> START / periodic RUNNING / COMPLETE / FAIL on the long-running streaming run — <code>specs/02-lineage-model.md:141–147</code>; reference "Run events" section lists exactly these four, and "RUNNING" as "periodically during normal streaming."</li>
+  <li><strong>Binlog position</strong> deliberately stays in the envelope, not in the OL event — <code>specs/02-lineage-model.md:146–147</code>; the reference emits no binlog marker either.</li>
+  <li><strong>Precision</strong> "Exact — passthrough; event schema retains MySQL column names" — <code>specs/02-lineage-model.md:100–101</code> — holds for the <strong>input</strong> dataset (source table schema, column names + types, per reference) and the MySQL columns remain present in the output dataset <strong>within the envelope's <code>after</code> record</strong> (see G1 for the facet-shape nuance).</li>
+</ul>
+
+<h3>1.6 Spec 03 §6 and spec 07 consistency</h3>
+
+<ul>
+  <li>Spec 03 §6 "OpenLineage integration (Marquez)" (<code>specs/03-debezium-kafka-spec.md:65–105</code>) describes exactly what the artifacts implement: job mapping <code>:73–81</code>, dataset mapping <code>:82–87</code>, the required <code>debezium-openlineage-core-3.6.2.Final-libs.tar.gz</code> dependency <code>:88–92</code>, the client config at <code>/kafka/openlineage.yml</code> <code>:93–94</code>, and the connector properties <code>:95–105</code> — all verified property-by-property in §1.3.</li>
+  <li>Spec 07 inventory rows 14–16 (<code>specs/07-deployment-docker.md:40–42</code>) and the env table (<code>:207–210</code>) match the compose file exactly (§1.4). The <code>connect</code> row (<code>specs/07-deployment-docker.md:30</code>) matches <code>docker-compose.yml:99–102</code> (<code>data-lineage-poc/connect:3.6.2.Final</code>, build <code>Dockerfile.connect</code>).</li>
+  <li>Spec 07 §Consistency (<code>specs/07-deployment-docker.md:335–344</code>) restates the emitted job identity and dataset namespaces as matching spec 02 — confirmed.</li>
+  <li>Version consistency: Debezium <code>3.6.2.Final</code> appears in spec 03 §6 (<code>:88</code>), spec 07 (<code>:30</code>), the compose image tag (<code>docker-compose.yml:99</code>), and the Dockerfile (<code>Dockerfile.connect:5,12</code>). Marquez <code>0.50.0</code> appears in spec 07 (<code>:41–42</code>) and the compose file (<code>docker-compose.yml:305,329</code>). No drift.</li>
+</ul>
+
+<h3>1.7 Runbook (spec 07 §7)</h3>
+
+<ul>
+  <li>Steps 4–7 (<code>specs/07-deployment-docker.md:292–317</code>) are a valid acceptance path for this hop: connectors <code>RUNNING</code> (<code>:294–295</code>), topics present (<code>:298–299</code>), a test row round-tripped MySQL → topic (<code>:301–307</code>), and lineage visible in Marquez UI/API (<code>:309–317</code>). The API query <code>GET /api/v1/events/lineage?limit=5</code> (<code>:316</code>) is a real Marquez read endpoint, and the OL events arrive at Marquez via <code>/api/v1/lineage</code> (<code>provisioning/openlineage.yml:8</code>), which is the OpenLineage ingest endpoint Marquez implements.</li>
+  <li>The expectation "run state RUNNING" (<code>:314</code>) is correct for a long-running streaming connector (see R5).</li>
+</ul>
+
+<hr>
+
+<h2>2. Consistency table</h2>
+
+<table>
+  <tr><th>Check</th><th>Expected</th><th>Observed</th><th>Status</th></tr>
+  <tr><td>Debezium image ↔ OL core libs lockstep</td><td>Same <code>3.6.2.Final</code> version</td><td><code>Dockerfile.connect:5</code> (FROM) and <code>:12</code> (OL core URL)</td><td>OK</td></tr>
+  <tr><td>Connect compose image ↔ Dockerfile</td><td><code>data-lineage-poc/connect:3.6.2.Final</code> built from <code>Dockerfile.connect</code></td><td><code>docker-compose.yml:99–102</code> ↔ <code>Dockerfile.connect:5</code></td><td>OK</td></tr>
+  <tr><td>OL client config ↔ baked path ↔ connector refs</td><td><code>/kafka/openlineage.yml</code> everywhere</td><td><code>Dockerfile.connect:21</code>, <code>register-connectors.sh:75,107</code></td><td>OK</td></tr>
+  <tr><td>OL transport ↔ Marquez port/endpoint</td><td><code>http://marquez:5000</code> + <code>/api/v1/lineage</code></td><td><code>provisioning/openlineage.yml:6–9</code> ↔ <code>docker-compose.yml:308</code></td><td>OK</td></tr>
+  <tr><td>Job identity ↔ spec 02</td><td><code>debezium.{connector}:mysql.0</code></td><td><code>register-connectors.sh:76,108</code> (namespace) + <code>topic.prefix=mysql</code> (<code>:73,105</code>) ↔ <code>specs/02-lineage-model.md:36–37,44–51</code></td><td>OK</td></tr>
+  <tr><td>Dataset namespaces ↔ spec 02</td><td><code>mysql://mysql:3306</code>/<code>shop.orders</code>, <code>kafka://kafka:9092</code>/<code>mysql.shop.orders</code></td><td>reference mapping + <code>specs/02-lineage-model.md:20</code>; no artifact overrides them</td><td>OK</td></tr>
+  <tr><td>Marquez versions 0.50.0 / postgres:14</td><td>API+web 0.50.0, DB postgres:14</td><td><code>docker-compose.yml:289,305,329</code> ↔ <code>specs/07-deployment-docker.md:40–42</code>; 0.50.0 verified real + RECOMMENDED</td><td>OK</td></tr>
+  <tr><td>depends_on chain marquez-db → marquez → marquez-web; connect gates on marquez</td><td>Per spec 07 §6</td><td><code>docker-compose.yml:116–122,318–320,336–338</code> ↔ <code>specs/07-deployment-docker.md:234–237,267–269</code></td><td>OK</td></tr>
+  <tr><td>Ports 5000/5001/3000 collision-free</td><td>Within compose + host</td><td>only marquez/marquez-web use them (<code>docker-compose.yml:308–309,332</code>); spec declares free (<code>specs/07-deployment-docker.md:177</code>)</td><td>OK</td></tr>
+  <tr><td>SMT config ↔ reference</td><td><code>transforms=openlineage</code>, <code>type=io.debezium.transforms.openlineage.OpenLineage</code></td><td><code>register-connectors.sh:81–82,113–114</code> ↔ reference complete example</td><td>OK</td></tr>
+  <tr><td>Reporting standard</td><td>md + self-contained HTML, same base name</td><td>this report ships <code>cdc-openlineage-review.md</code> + <code>.html</code>, consistent with <code>reports/architecture-review.{md,html}</code></td><td>OK</td></tr>
+</table>
+
+<hr>
+
+<h2>3. Reference verification (Debezium 3.6 OpenLineage doc)</h2>
+
+<p>Every config decision in the artifacts was checked against the reference:</p>
+
+<ol>
+  <li>Job name = <code>topic.prefix</code> + task ID (doc example <code>inventory.0</code>) → <code>mysql.0</code>. ✓</li>
+  <li>Namespace = <code>openlineage.integration.job.namespace</code>, default <code>topic.prefix</code> → the deliberate per-connector override. ✓</li>
+  <li>Input datasets: one per monitored table; schema = source column names + types; DDL changes reflected dynamically. ✓</li>
+  <li>Output datasets (Kafka Connect): created by the OpenLineage SMT; name from topic prefix; namespace <code>kafka://bootstrap-server:port</code>; schema = complete CDC event structure (<code>before</code>/<code>after</code>/<code>source</code>/transaction metadata, field types, nested structures). ✓</li>
+  <li>Property table: <code>enabled</code> (required), <code>config.file.path</code> (required), <code>job.namespace/description/tags/owners</code>, <code>dataset.kafka.bootstrap.servers</code> (source: optional, defaults to schema-history bootstrap). ✓</li>
+  <li>SMT type <code>io.debezium.transforms.openlineage.OpenLineage</code>. ✓</li>
+  <li>Dependency archive <code>debezium-openlineage-core-3.6.2.Final-libs.tar.gz</code> from Maven Central (same URL as the doc). ✓</li>
+  <li>Run events START / RUNNING / COMPLETE / FAIL. ✓</li>
+  <li>Common client-config location <code>/kafka/openlineage.yml</code>. ✓</li>
+</ol>
+
+<p>No property name, value, or mapping in the artifacts contradicts the reference.</p>
+
+<hr>
+
+<h2>4. Risks</h2>
+
+<table>
+  <tr><th>#</th><th>Risk</th><th>Impact</th><th>Mitigation / status</th></tr>
+  <tr><td>R1</td><td><strong>SMT × Avro schema-representation</strong>: the Marquez schema facet for <code>kafka://kafka:9092/mysql.shop.orders</code> is derived from the Connect in-memory schema at SMT time, while the registry subject <code>mysql.shop.orders-value</code> is the Avro converter's serialization of the same envelope — two independently-produced representations (logical types, type names, ordering may differ)</td><td>Schema facet may not equal the registry subject</td><td>spec 06 already flags this (<code>specs/06-validation-metrics.md:57</code>); validate at bring-up; the registry subject stays the lineage schema facet per spec 02 (<code>specs/02-lineage-model.md:26–30</code>)</td></tr>
+  <tr><td>R2</td><td><strong>Marquez healthcheck tooling</strong>: <code>marquez</code> and <code>marquez-web</code> healthchecks use <code>bash -c 'exec 3&lt;&gt;/dev/tcp/...'</code> (<code>docker-compose.yml:322,341</code>); if the images lack bash the checks never pass — and because <code>connect</code> depends on <code>marquez</code> healthy (<code>docker-compose.yml:121–122</code>), a failed check stalls the <strong>whole CDC hop</strong></td><td>Stack-wide gate</td><td>spec 06 risk row (<code>specs/06-validation-metrics.md:58</code>); validate at bring-up; fall back to a TCP/curl probe</td></tr>
+  <tr><td>R3</td><td><strong>Version lockstep</strong>: (a) connect image ↔ OL core libs are a pair at <code>3.6.2.Final</code> enforced only in <code>Dockerfile.connect:5,12</code>; (b) marquez API ↔ marquez-web at <code>0.50.0</code> (<code>docker-compose.yml:305,329</code>); (c) the openlineage-java client bundled in the 3.6.2.Final-libs archive vs Marquez 0.50.0's OL spec (2-0-2) is unverified</td><td>SMT missing / events rejected if any pair drifts</td><td>spec 06 risk row (<code>specs/06-validation-metrics.md:59</code>); upgrade as pairs; confirm client↔Marquez event acceptance at bring-up (Marquez 0.50.0 records older-spec events, so risk is low)</td></tr>
+  <tr><td>R4</td><td><strong>OL backend on the CDC critical path</strong>: <code>connect</code> now gates on <code>marquez</code> healthy (<code>docker-compose.yml:121–122</code>) — a Marquez outage stops data flow, not just lineage</td><td>Availability coupling</td><td>Intentional for the POC (spec 07 §6 <code>:267–268</code>); document for the production recommendation</td></tr>
+  <tr><td>R5</td><td><strong>Streaming run semantics</strong>: the connector run stays <code>RUNNING</code> indefinitely (START once, periodic RUNNING, COMPLETE only at shutdown) — the runbook's "run state RUNNING" (<code>specs/07-deployment-docker.md:314</code>) is correct, but a reviewer expecting COMPLETE will misread the graph</td><td>Misreading, not breakage</td><td>Document that CDC runs are long-lived (spec 02 already says so, <code>:144–146</code>)</td></tr>
+  <tr><td>R6</td><td><strong>Shared bare job name <code>mysql.0</code></strong>: searching Marquez for "mysql.0" returns two jobs disambiguated only by namespace</td><td>UI-search confusion</td><td>Documented as intended (spec 02 <code>:44–51</code>); harmless to the join model</td></tr>
+  <tr><td>R7</td><td><strong><code>marquez-db</code> has no <code>POSTGRES_DB</code></strong> (<code>docker-compose.yml:291–293</code>): the <code>marquez</code> database exists only via <code>init-marquez.sql</code> on first boot</td><td>If the script is dropped or the volume pre-seeded, the marquez app has no DB</td><td>Consistent with spec 07 §1 row 14; note as a boot-once dependency</td></tr>
+</table>
+
+<hr>
+
+<h2>5. Reconciliation gaps / drifts (documented, not fixed)</h2>
+
+<table>
+  <tr><th>#</th><th>Finding</th><th>Evidence</th><th>Recommendation</th></tr>
+  <tr><td>G1</td><td><strong>Kafka output dataset schema facet = full envelope</strong>, not the <code>after</code> record. The reference says the SMT captures "the complete CDC event structure"; spec 02/03 say "the dataset schema facet is the after record (the MySQL columns)" (<code>specs/03-debezium-kafka-spec.md:38–40</code>; <code>specs/02-lineage-model.md:26–27</code>). MySQL columns remain present (nested under <code>after</code>), so joins and column tracing hold; only the facet <em>shape</em> differs. This effectively answers OQ4 (<code>specs/02-lineage-model.md:178</code>; <code>specs/06-validation-metrics.md:71</code>) toward "envelope"</td><td>reference "Output dataset lineage" / "complete CDC event structure"; spec 03 §3 vs §6</td><td>Update spec 02/03 wording to "the Kafka dataset schema facet is the CDC envelope (columns under <code>after</code>); the MySQL input dataset facet is the flat source table schema"; close OQ4</td></tr>
+  <tr><td>G2</td><td><strong>deployment facet endpoints omit the OL backend</strong>: spec 02's <code>deployment</code> facet block (<code>specs/02-lineage-model.md:82–91</code>) lists mysql/kafka/connect/schema-registry/spark/nessie/warehouse but no <code>marquez</code>/<code>openlineage</code> endpoint, even though the stack now includes it; spec 07 §Consistency (<code>:342</code>) treats Marquez as "not a lineage model entity"</td><td><code>specs/02-lineage-model.md:82–91</code> vs <code>docker-compose.yml:304–326</code></td><td>Either add <code>openlineage: "http://marquez:5000"</code> to the facet endpoints or state explicitly that the collector is out of the facet model (the current stance is implicit)</td></tr>
+  <tr><td>G3</td><td><strong>Runbook wording</strong> "schema facet shows the columns" (<code>specs/07-deployment-docker.md:314</code>) — the Kafka dataset's facet will show the envelope structure with columns nested under <code>after</code> (the MySQL input dataset shows them flat)</td><td>per G1</td><td>Minor wording tweak when G1 lands</td></tr>
+  <tr><td>G4</td><td>Resolved since the prior review: <code>database.server.name</code> + <code>topic.prefix</code> duplication removed (<code>reports/architecture-review.md:46</code> → <code>register-connectors.sh:73,105</code>); lineage sink exists (<code>reports/architecture-review.md:17</code> → spec 07 rows 14–16)</td><td>prior report vs current artifacts</td><td>note for the change log</td></tr>
+</table>
+
+<hr>
+
+<h2>6. Bring-up validation checklist (observation, not fixes)</h2>
+
+<ol>
+  <li><code>marquez</code> and <code>marquez-web</code> report healthy (bash <code>/dev/tcp</code> probes pass) — else R2 applies and <code>connect</code> never starts.</li>
+  <li>After connector start, Marquez shows jobs <code>debezium.shop-orders:mysql.0</code> and <code>debezium.shop-customers:mysql.0</code> with run state RUNNING.</li>
+  <li>Input dataset <code>mysql://mysql:3306</code> / <code>shop.orders</code> has a schema facet with the source columns; output dataset <code>kafka://kafka:9092</code> / <code>mysql.shop.orders</code> has the envelope structure (R1/G1 check).</li>
+  <li>Compare the Marquez Kafka schema facet against registry subject <code>mysql.shop.orders-value</code>; record any representation differences.</li>
+  <li>Insert a test row (spec 07 §7 step 6) and confirm a START/RUNNING event lands in Marquez within seconds; confirm topics and registry subjects as the runbook expects.</li>
+  <li>Confirm the OL client bundled with Debezium 3.6.2.Final emits events Marquez 0.50.0 accepts (R3c).</li>
+</ol>
+
+<hr>
+
+<h2>7. Unresolved contradictions (documented, not silently fixed)</h2>
+
+<ol>
+  <li><strong>G1</strong> — spec 02/03 "schema facet = <code>after</code> record" vs the reference's emitted "complete CDC event structure" (envelope) for the Kafka output dataset. Tied to OQ4.</li>
+  <li><strong>G2</strong> — deployment facet endpoints (spec 02 <code>:82–91</code>) omit the OpenLineage backend now present in the stack (spec 07 <code>:40–42</code>, compose <code>:304–326</code>).</li>
+  <li><strong>G3</strong> — runbook step 7 "schema facet shows the columns" under-describes the envelope shape.</li>
+  <li><strong>R7 / minor</strong> — <code>marquez-db</code> lacks <code>POSTGRES_DB</code> in both compose (<code>:291–293</code>) and spec 07 §1 row 14; DB existence depends on the first-boot init script.</li>
+</ol>
+
+<p>None of these block testing the CDC hop; all are documentation reconciliations or bring-up validations.</p>
+
+</body>
+</html>
