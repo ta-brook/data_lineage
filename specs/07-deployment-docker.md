@@ -31,9 +31,9 @@ repo root.
 | 5 | `airflow-db` | `postgres:16` | Airflow metadata database | — | 5432 | `airflow-db-data:/var/lib/postgresql/data` | `POSTGRES_USER=airflow`, `POSTGRES_PASSWORD` (default `airflow`), `POSTGRES_DB=airflow` |
 | 6 | `airflow-webserver` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | Airflow UI + REST; submits Spark apps (spark-submit client only) | 8080 | 8080 | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | `AIRFLOW__CORE__EXECUTOR=LocalExecutor`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077`, `AIRFLOW__OPENLINEAGE__TRANSPORT` |
 | 7 | `airflow-scheduler` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | DAG parsing + task scheduling | — | — | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | same as webserver (compose anchor `*airflow-env`) |
-| 8 | `spark-master` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | Spark cluster master | 8082 | 8080 (web UI), 7077 (RPC — no host port) | `./spark-apps:/opt/spark-apps` | none in compose; Nessie/MinIO config baked into `spark-defaults.conf` |
-| 9 | `spark-worker` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | Spark worker; runs driver + executors (deploy-mode cluster) | 8084 | 8081 (web UI) | `./spark-apps:/opt/spark-apps` | none in compose; same baked config |
-| 10 | `nessie` | `ghcr.io/projectnessie/nessie:0.108.4` (GHCR, not Docker Hub) | Iceberg catalog (versioned REST catalog) | 19120 | 19120 | `nessie-data:/var/lib/nessie` | `NESSIE_VERSION_STORE_TYPE=INMEMORY` |
+| 8 | `spark-master` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | Spark cluster master | 8082 | 8080 (web UI), 7077 (RPC — no host port) | `./spark-apps:/opt/spark-apps` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`; Nessie/MinIO config baked into `spark-defaults.conf` |
+| 9 | `spark-worker` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | Spark worker; runs driver + executors (deploy-mode cluster) | 8084 | 8081 (web UI) | `./spark-apps:/opt/spark-apps` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`; same baked config |
+| 10 | `nessie` | `ghcr.io/projectnessie/nessie:0.108.4` (GHCR, not Docker Hub) | Iceberg catalog (versioned REST catalog) | 19120 | 19120 | `nessie-data:/data` | `NESSIE_VERSION_STORE_TYPE=ROCKSDB`, `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH=/data/nessie` |
 | 11 | `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | S3-compatible object storage; Iceberg warehouse | 9000 (S3), 9002 (console) | 9000 (S3), 9001 (console) | `minio-data:/data` | `MINIO_ROOT_USER` (default `pocadmin`), `MINIO_ROOT_PASSWORD` |
 | 12 | `mc` | `minio/mc:latest` | **One-shot** gate: creates bucket `poc-warehouse` | — | — | `./provisioning/mc-init.sh:/provisioning/mc-init.sh:ro` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` |
 | 13 | `provision` | `curlimages/curl:8.10.1` | **One-shot** gate: registers connectors `shop-orders` / `shop-customers` via Connect REST | — | — | `./provisioning/register-connectors.sh:/provisioning/register-connectors.sh:ro` | — |
@@ -43,10 +43,10 @@ Notes:
 - `airflow-webserver` / `airflow-scheduler` share one image and one env block (compose
   YAML anchor). There is **no separate `airflow-init` container**; the official Airflow
   image entrypoint runs `airflow db migrate` on first webserver/scheduler start.
-- `spark-master` / `spark-worker` set **no environment in compose**. The Nessie URI,
-  MinIO endpoint, and S3A mirror are baked into `spark-defaults.conf`; the MinIO
-  credentials are referenced there as `${MINIO_ROOT_USER}` / `${MINIO_ROOT_PASSWORD}`
-  (see risk in section 5).
+- `spark-master` / `spark-worker` receive `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
+  from compose. The Nessie URI, MinIO endpoint, and S3A mirror are baked into
+  `spark-defaults.conf`; the MinIO credentials there are hardcoded POC values that
+  MUST match `.env.example` (Spark does not expand `${VAR}` in spark-defaults.conf).
 - `mc` and `provision` run once (`restart: "no"`) and exit 0.
 
 ## 2. Service topology
@@ -115,7 +115,7 @@ One-shot gates: `provision` (connectors, after connect+kafka healthy) and `mc`
 | `kafka-data` | `/var/lib/kafka/data` | kafka |
 | `minio-data` | `/data` | minio |
 | `airflow-db-data` | `/var/lib/postgresql/data` | airflow-db |
-| `nessie-data` | `/var/lib/nessie` | nessie (reserved; store is INMEMORY in the POC) |
+| `nessie-data` | `/data` | nessie (RocksDB catalog store) |
 
 ### Bind mounts
 
@@ -180,17 +180,17 @@ Cross-service wiring values. Secrets come from `.env` (template: `.env.example`)
 | airflow-* | `AIRFLOW__OPENLINEAGE__TRANSPORT` | `{"type":"console"}` | OL sink; Marquez optional (spec 04) |
 | airflow-* | `AIRFLOW__CORE__FERNET_KEY` / `AIRFLOW__WEBSERVER__SECRET_KEY` | `${FERNET_KEY}` / `${AIRFLOW__WEBSERVER__SECRET_KEY}` | secrets (from `.env`) |
 | airflow-* | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | `${AIRFLOW_USERNAME:-admin}` / `${AIRFLOW_PASSWORD:-admin}` | UI login |
-| nessie | `NESSIE_VERSION_STORE_TYPE` | `INMEMORY` | POC catalog store (no persistence) |
+| nessie | `NESSIE_VERSION_STORE_TYPE` | `ROCKSDB` | catalog metadata persisted to the named volume |
+| nessie | `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH` | `/data/nessie` | RocksDB data directory |
 | minio | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `${MINIO_ROOT_USER:-pocadmin}` / `${MINIO_ROOT_PASSWORD}` | S3 credentials (secret) |
+| minio | `MINIO_REGION` | `us-east-1` | region expected by S3 clients (S3FileIO) |
 | mc | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | same | bucket creation credentials |
-| spark-master / spark-worker | *(none set in compose)* | — | Nessie URI + MinIO endpoint baked in `spark-defaults.conf` |
+| spark-master / spark-worker | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `${MINIO_ROOT_USER:-pocadmin}` / `${MINIO_ROOT_PASSWORD}` | S3 credentials for Hadoop S3A components; Nessie URI + MinIO endpoint baked in `spark-defaults.conf` |
 
-**Risk (flagged):** `spark-defaults.conf` substitutes `${MINIO_ROOT_USER}` /
-`${MINIO_ROOT_PASSWORD}` and its comment states these are "set on spark-master/
-spark-worker in compose" — but `docker-compose.yml` sets **no environment** on those
-two services. The substitution will not resolve at runtime. Fix before execution:
-add an `environment:` block with the MinIO credentials to `spark-master` and
-`spark-worker` (or hardcode POC creds in `spark-defaults.conf`).
+**Note:** `spark-defaults.conf` hardcodes the POC MinIO credentials (`pocadmin` /
+`minio-poc-secret`) because Spark does not expand `${VAR}` in that file. They MUST
+match `.env.example` (`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`); the compose env on
+spark-master/spark-worker is a belt-and-suspenders for Hadoop S3A components.
 
 Secrets referenced from `.env.example`: `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`,
 `CLUSTER_ID`, `AIRFLOW_DB_PASSWORD`, `FERNET_KEY`,
@@ -211,7 +211,7 @@ provision (one-shot) ──depends_on connect + kafka (healthy)── registers 
 airflow-db ──(no deps)── healthcheck: pg_isready
 airflow-webserver ──depends_on airflow-db (healthy)── healthcheck: curl /health
 airflow-scheduler ──depends_on airflow-db (healthy)── (no healthcheck)
-spark-master ──(no deps)── healthcheck: GET localhost:8080
+spark-master ──depends_on nessie + minio (healthy)── healthcheck: GET localhost:8080
 spark-worker ──depends_on spark-master (healthy)── healthcheck: GET localhost:8081
 nessie ──(no deps)── healthcheck: /dev/tcp localhost:19120
 minio ──(no deps)── healthcheck: curl /minio/health/live
@@ -230,10 +230,9 @@ Two one-shot gates:
 
 Notes:
 
-- `spark-master` / `spark-worker` do **not** depend on `nessie` / `minio` in compose
-  (specs 04/05 describe that dependency, but the compose file does not implement it).
-  The Spark app itself will fail if the catalog/warehouse are down; compose does not
-  gate it.
+- `spark-master` gates on `nessie` + `minio` healthy (specs 04/05); `spark-worker`
+  gates on `spark-master` healthy. A DAG triggered before the catalog/warehouse are
+  up will still fail at Spark-run time if the tables/bucket are not yet provisioned.
 - Airflow services do not depend on `kafka` / `connect`; topics are only needed at
   Spark-run time.
 - `mysql` init SQL runs only on first boot (empty `mysql-data` volume).
