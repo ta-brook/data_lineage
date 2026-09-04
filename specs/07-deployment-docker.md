@@ -105,11 +105,13 @@ Control flow: `airflow-webserver/scheduler → spark-master → spark-worker`.
 One-shot gates: `provision` (connectors, after connect+kafka healthy) and `mc`
 (bucket `poc-warehouse`, after minio healthy).
 
-OpenLineage side (CDC hop lineage, spec 03):
+OpenLineage side (all three hops emit to Marquez, spec 02/03/04/05):
 
     connect ──OL HTTP (http://marquez:5000/api/v1/lineage)──▶ marquez (API :5000, admin :5001)
-                                                                      │
-                                                      marquez-web (UI :3000) ── lineage graph
+    airflow-webserver/scheduler ──OL HTTP (same endpoint)──▶        │
+    spark-master/worker (listener) ──OL HTTP (same endpoint)──▶     │
+                                                                     ▼
+                                                     marquez-web (UI :3000) ── lineage graph
 
 ## 3. Network / ports / volumes
 
@@ -195,7 +197,8 @@ Cross-service wiring values. Secrets come from `.env` (template: `.env.example`)
 | connect | `CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL` / `CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` | registry for Avro |
 | airflow-* | `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` | `postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-db:5432/airflow` | metadata DB |
 | airflow-* | `AIRFLOW_CONN_SPARK_DEFAULT` | `spark://spark-master:7077` | SparkSubmitOperator master |
-| airflow-* | `AIRFLOW__OPENLINEAGE__TRANSPORT` | `{"type":"console"}` | stays console until the Airflow/Spark hops land (ticket T-01) |
+| airflow-* | `AIRFLOW__OPENLINEAGE__TRANSPORT` | `{"type": "http", "url": "http://marquez:5000/api/v1/lineage"}` | Marquez sink (ticket T-01); DAGs pin the same transport inline |
+| airflow-* | `AIRFLOW__OPENLINEAGE__NAMESPACE` | `airflow` | parent job namespace `airflow:{dag}.{task}` (spec 02/04) |
 | airflow-* | `AIRFLOW__CORE__FERNET_KEY` / `AIRFLOW__WEBSERVER__SECRET_KEY` | `${FERNET_KEY}` / `${AIRFLOW__WEBSERVER__SECRET_KEY}` | secrets (from `.env`) |
 | airflow-* | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | `${AIRFLOW_USERNAME:-admin}` / `${AIRFLOW_PASSWORD:-admin}` | UI login |
 | nessie | `NESSIE_VERSION_STORE_TYPE` | `ROCKSDB` | catalog metadata persisted to the named volume |
@@ -239,7 +242,7 @@ provision (one-shot) ──depends_on connect + kafka (healthy)── registers 
 airflow-db ──(no deps)── healthcheck: pg_isready
 airflow-webserver ──depends_on airflow-db (healthy)── healthcheck: curl /health
 airflow-scheduler ──depends_on airflow-db (healthy)── (no healthcheck)
-spark-master ──depends_on nessie + minio (healthy)── healthcheck: GET localhost:8080
+spark-master ──depends_on nessie + minio + marquez (healthy)── healthcheck: GET localhost:8080
 spark-worker ──depends_on spark-master (healthy)── healthcheck: GET localhost:8081
 nessie ──(no deps)── healthcheck: /dev/tcp localhost:19120
 minio ──(no deps)── healthcheck: curl /minio/health/live
@@ -258,9 +261,11 @@ Two one-shot gates:
 
 Notes:
 
-- `spark-master` gates on `nessie` + `minio` healthy (specs 04/05); `spark-worker`
-  gates on `spark-master` healthy. A DAG triggered before the catalog/warehouse are
-  up will still fail at Spark-run time if the tables/bucket are not yet provisioned.
+- `spark-master` gates on `nessie` + `minio` + `marquez` healthy (specs 04/05; Marquez
+  because the Spark OL listener posts START/COMPLETE/FAIL at app run time, ticket
+  T-01); `spark-worker` gates on `spark-master` healthy. A DAG triggered before the
+  catalog/warehouse are up will still fail at Spark-run time if the tables/bucket are
+  not yet provisioned.
 - Airflow services do not depend on `kafka` / `connect`; topics are only needed at
   Spark-run time.
 - `mysql` init SQL runs only on first boot (empty `mysql-data` volume).
@@ -323,8 +328,18 @@ curl http://localhost:19120/api/v2/trees/main
 # 9. MinIO warehouse (console http://localhost:9002, pocadmin / minio-poc-secret)
 #    expect: bucket poc-warehouse with parquet under poc/shop_orders/
 
-# 10. Airflow/Spark hops: NOT part of this phase (CDC hop only)
-#     their OL transports stay console until implemented (ticket T-01)
+# 10. Airflow/Spark hops: trigger a DAG and verify the full lineage chain in Marquez
+#     (ticket T-01: Airflow + Spark OL transports now HTTP -> Marquez)
+docker compose exec airflow-webserver airflow dags trigger load_orders
+#     wait for spark_load_orders + capture_snapshot to COMPLETE (UI http://localhost:8080)
+#     Marquez UI http://localhost:3000 -> search "shop_orders":
+#       debezium.shop-orders:mysql.0
+#         -> kafka://kafka:9092/mysql.shop.orders
+#         -> airflow:load_orders.spark_load_orders (parent)
+#         -> spark:load_orders (child, run of record)
+#     expect: columnLineage facet on the Spark run (exact for the declarative SELECT;
+#             total_price = quantity * unit_price), kafkaOffset facet, snapshot id
+#             captured by capture_snapshot (xcom snapshot_id)
 ```
 
 Acceptance criteria map to the lineage model (spec 02): topic names
