@@ -5,7 +5,8 @@ Lineage (spec 02/04):
 - parent job:  airflow:load_orders.spark_load_orders
 - child job:   spark:load_orders (Spark app; run of record for the data chain)
 - input:       kafka:mysql.shop.orders
-- output:      poc:shop_orders (version marker = Iceberg snapshot id)
+- output:      poc:shop_orders (version marker = Iceberg snapshot id, read back
+               from the warehouse via MinIO s3.endpoint)
 """
 
 import logging
@@ -74,8 +75,10 @@ def capture_snapshot(**context):
     """Read back the Iceberg snapshot id of poc.shop_orders (spec 02 version marker).
 
     The snapshot id closes the lineage chain: Kafka offset (kafkaOffset facet on the
-    Spark run) -> Iceberg snapshot id (this task). A missing snapshot means the Spark
-    run did not commit, so we fail loudly rather than emit a broken lineage path.
+    Spark run) -> Iceberg snapshot id (this task). The warehouse is read via MinIO
+    (s3.endpoint) so the Nessie catalog resolves s3://poc-warehouse/ to minio:9000,
+    not AWS S3. A missing snapshot means the Spark run did not commit, so we fail
+    loudly rather than emit a broken lineage path.
     """
     from pyiceberg.catalog import load_catalog
 
@@ -85,6 +88,14 @@ def capture_snapshot(**context):
         uri=config.NESSIE_URI,
         ref=config.NESSIE_REF,
         warehouse=config.WAREHOUSE,
+        **{
+            # MinIO S3 config (same property names as Iceberg's S3FileIO) so the
+            # warehouse resolves to minio:9000, not AWS S3.
+            "s3.endpoint": config.MINIO_ENDPOINT,
+            "s3.path-style-access": "true",
+            "s3.access-key-id": config.MINIO_ACCESS_KEY,
+            "s3.secret-access-key": config.MINIO_SECRET_KEY,
+        },
     )
     table = catalog.load_table("poc.shop_orders")
     snapshot = table.current_snapshot()
