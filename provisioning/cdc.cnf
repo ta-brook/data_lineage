@@ -1,0 +1,19 @@
+# cdc.cnf - MySQL server config for Debezium CDC (spec 03 / 07).
+# Mounted at /etc/mysql/conf.d/cdc.cnf in the mysql container.
+
+[mysqld]
+# Unique server id for this MySQL instance. The Debezium connectors use
+# database.server.id 223345/223346 (register-connectors.sh) so they are not
+# mistaken for replication topology members.
+server-id=223344
+# Row-based binlog with FULL row images: every change event carries complete
+# before/after column values -> exact column lineage to the Kafka topic.
+binlog_format=ROW
+binlog_row_image=FULL
+# GTID mode: gives the connector a stable, restartable position marker
+# (binlog position is the lineage version marker for this hop, spec 02).
+gtid_mode=ON
+enforce_gtid_consistency=ON
+# 7 days = 604800s, aligned with Kafka topic retention (spec 03) so a connector
+# that is down can still catch up from the binlog.
+binlog_expire_logs_seconds=604800
