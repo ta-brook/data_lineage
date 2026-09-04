@@ -4,7 +4,8 @@ Runnable docker-compose POC for end-to-end **column-level data lineage** across 
 orchestration pipeline. The stack is authored (compose file, Dockerfiles, sample DAGs,
 sample Spark apps, provisioning scripts) but **not yet executed or tested**. Lineage
 metadata is collected via OpenLineage into **Marquez** (OpenLineage backend + UI,
-http://localhost:3000, API :5000), the lineage display tool for the CDC hop.
+http://localhost:3000, API :5000) — the central lineage store for all three hops
+(Debezium CDC, Airflow, Spark).
 
 ```
 MySQL → Debezium → Kafka → Airflow → Spark → Iceberg
@@ -18,10 +19,11 @@ data-lineage-poc/
 ├── docker-compose.yml        # full stack: MySQL, Debezium, Kafka, Airflow, Spark, Nessie, MinIO, Marquez
 ├── Dockerfile.airflow        # Airflow image (spark-submit client, pyiceberg, openlineage)
 ├── Dockerfile.spark          # Spark image (Iceberg/Nessie/Kafka/OpenLineage jars baked in)
-├── spark-defaults.conf       # Nessie catalog, S3A mirror, OpenLineage listener
+├── Dockerfile.connect        # Debezium Connect image (OpenLineage core libs + client config)
+├── spark-defaults.conf       # Nessie catalog, S3A mirror, OpenLineage listener (HTTP → Marquez)
 ├── dags/                     # sample DAGs (load_orders, load_customers)
 ├── spark-apps/               # sample PySpark apps (Kafka → Iceberg)
-├── provisioning/             # init-mysql.sql, cdc.cnf, register-connectors.sh, mc-init.sh
+├── provisioning/             # init-mysql.sql, cdc.cnf, register-connectors.sh, mc-init.sh, openlineage.yml
 ├── reports/                  # data-architecture review output (markdown + human-readable HTML)
 └── specs/                    # POC design documents (00–07)
 ```
