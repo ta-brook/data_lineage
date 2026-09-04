@@ -133,7 +133,8 @@ marker breaks the path.
 
 ## Joining rules
 
-- Join MySQL → Kafka by the topic-naming convention (topic embeds `db.schema.table`).
+- Join MySQL → Kafka by the topic-naming convention (topic embeds `db.table`; MySQL
+  database = schema).
 - Join Kafka → Spark by the input dataset declared on the Spark run (the topic).
 - Join Spark → Iceberg by the output dataset identity (namespace/name), versioned by
   snapshot id.

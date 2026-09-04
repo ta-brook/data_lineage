@@ -20,7 +20,7 @@ Design of `MySQL → Debezium → Kafka`, including the Docker containers for th
 
 ### 2. Topic topology
 
-- **Topic-per-table** (recommended): one topic per `db.schema.table`. Rationale: clean
+- **Topic-per-table** (recommended): one topic per `db.table`. Rationale: clean
   lineage mapping, independent retention per table, easier column-level traceability.
 - Partitioning: key = MySQL primary key → ordering preserved per row.
 - Retention: 7 days, aligned with Iceberg snapshot retention (see spec 05) so no data
@@ -48,7 +48,7 @@ Design of `MySQL → Debezium → Kafka`, including the Docker containers for th
 | Entity | Convention | Example |
 |---|---|---|
 | Connector (lineage job) | `debezium:{connector}` | `debezium:shop-orders` |
-| Topic (lineage dataset) | `mysql.{db}.{schema}.{table}` | `mysql.shop.orders` |
+| Topic (lineage dataset) | `mysql.{db}.{table}` | `mysql.shop.orders` |
 | Event key | MySQL PK | `{ "id": 42 }` |
 
 The topic name embeds the full MySQL dataset identity, which is what lets lineage join
@@ -57,7 +57,7 @@ lever that produces these names — treat it as immutable once data flows.
 
 ### 5. Lineage metadata emitted
 
-- Source identity: `db.schema.table` (from connector config).
+- Source identity: `db.table` (from connector config).
 - Output dataset: the topic name + event schema (registry subject `{topic}-value`).
 - Run/version marker: binlog position (source) and Kafka offset (broker).
 - Precision: **exact** column passthrough — no renames, no transforms.
@@ -117,6 +117,6 @@ lever that produces these names — treat it as immutable once data flows.
 
 ## Cross-dependencies
 
-- Airflow/Spark input dataset names must match `mysql.{db}.{schema}.{table}` (spec 04).
+- Airflow/Spark input dataset names must match `mysql.{db}.{table}` (spec 04).
 - Kafka retention must not exceed Iceberg snapshot retention (spec 05).
 - Spark containers must reach `schema-registry:8081` for the from_avro UDF.

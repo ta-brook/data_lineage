@@ -15,6 +15,9 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
 - **Table-per-topic** (mirrors topic-per-table): each Kafka topic lands in one Iceberg
   table.
 - Schema = event schema from Kafka, mapped 1:1 back to MySQL columns (names preserved).
+- Note: the POC's `poc.shop_orders` also carries ONE derived column
+  (`total_price = quantity * unit_price`) computed in the Spark transform — this is the
+  exact-column-lineage demo (spec 02/04); all other columns map 1:1.
 - Schema evolution: expect additive changes; column renames must be coordinated with
   the lineage model (they break joins if unmanaged).
 
