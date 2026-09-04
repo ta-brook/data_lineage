@@ -1,0 +1,76 @@
+# =============================================================================
+# Dockerfile.spark — Spark image for the Iceberg sink hop (Spark -> Iceberg).
+#
+# Base: apache/spark:3.5.0 (NOT bitnami — deprecated per STATE.md §4/§5).
+# The image bakes in every jar the Spark apps need (Iceberg, Nessie, Kafka,
+# Avro, OpenLineage, S3A) so the Airflow image only needs a spark-submit
+# client (spec 04 §2) and the apps run in deploy-mode cluster on the workers.
+# All jars are pinned to the exact versions in STATE.md §5 / spec 05.
+# =============================================================================
+FROM apache/spark:3.5.0
+
+USER root
+
+# --- curl for Maven Central downloads ----------------------------------------
+# Defensive: ensure curl exists in the base image before downloading jars.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Iceberg Spark runtime (Spark 3.5 / Scala 2.12) --------------------------
+# SparkCatalog + Iceberg table operations (MERGE INTO, snapshot commits).
+# This is what makes the Spark app an Iceberg writer (spec 05 §2).
+RUN curl -fsSL -o /opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.11.0.jar \
+    https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/1.11.0/iceberg-spark-runtime-3.5_2.12-1.11.0.jar
+
+# --- Iceberg AWS bundle ------------------------------------------------------
+# S3FileIO + AWS SDK: client-side S3 access to MinIO
+# (spark.sql.catalog.nessie.io-impl=org.apache.iceberg.aws.s3.S3FileIO).
+RUN curl -fsSL -o /opt/spark/jars/iceberg-aws-bundle-1.11.0.jar \
+    https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.11.0/iceberg-aws-bundle-1.11.0.jar
+
+# --- Nessie Spark extensions -------------------------------------------------
+# NessieSparkSessionExtensions: Nessie catalog refs + DDL. Version matches the
+# Nessie server minor (0.108.x) per spec 05 cross-dependencies.
+RUN curl -fsSL -o /opt/spark/jars/nessie-spark-extensions-3.5_2.12-0.108.4.jar \
+    https://repo1.maven.org/maven2/org/projectnessie/nessie-spark-extensions-3.5_2.12/0.108.4/nessie-spark-extensions-3.5_2.12-0.108.4.jar
+
+# --- spark-sql-kafka ---------------------------------------------------------
+# Kafka source for batch reads (spark.read.format("kafka")) on the
+# mysql.shop.orders / mysql.shop.customers topics (spec 03 §2).
+RUN curl -fsSL -o /opt/spark/jars/spark-sql-kafka-0-10_2.12-3.5.0.jar \
+    https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.0/spark-sql-kafka-0-10_2.12-3.5.0.jar
+
+# --- spark-avro --------------------------------------------------------------
+# Avro support (from_avro/to_avro functions); complements the Python fastavro
+# UDF used for Confluent Avro deserialization (spec 03 §3).
+RUN curl -fsSL -o /opt/spark/jars/spark-avro_2.12-3.5.0.jar \
+    https://repo1.maven.org/maven2/org/apache/spark/spark-avro_2.12/3.5.0/spark-avro_2.12-3.5.0.jar
+
+# --- openlineage-spark -------------------------------------------------------
+# OpenLineageSparkListener: emits lineage events (columnLineage, kafkaOffset,
+# sparkApplication, parentRun facets) from the Spark logical plan (spec 02/04).
+# This is the sink hop's lineage emitter — the run of record for the chain.
+RUN curl -fsSL -o /opt/spark/jars/openlineage-spark_2.12-1.52.0.jar \
+    https://repo1.maven.org/maven2/io/openlineage/openlineage-spark_2.12/1.52.0/openlineage-spark_2.12-1.52.0.jar
+
+# --- hadoop-aws + aws-java-sdk-bundle ----------------------------------------
+# S3A filesystem for Hadoop (spark.hadoop.fs.s3a.* mirror config in
+# spark-defaults.conf) so Hadoop/Spark components can reach MinIO too.
+RUN curl -fsSL -o /opt/spark/jars/hadoop-aws-3.3.4.jar \
+    https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar
+
+RUN curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
+    https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
+
+# --- Python deps for the from_avro UDF (spark-apps/load_*.py) ----------------
+# fastavro: decode Confluent Avro payloads with the registry writer schema.
+# requests: fetch the writer schema JSON from http://schema-registry:8081.
+RUN pip install --no-cache-dir fastavro requests
+
+# --- Spark defaults ----------------------------------------------------------
+# Nessie catalog, S3A mirror, OpenLineage listener, SQL extensions.
+# Written next to this Dockerfile; COPY'd into the Spark conf dir.
+COPY spark-defaults.conf /opt/spark/conf/spark-defaults.conf
+
+USER spark
