@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Lineage POC — Architecture Diagrams (Original Design vs. Implemented)</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a2e;
+    --muted: #555555;
+    --accent: #1f4e79;
+    --accent2: #2e75b6;
+    --border: #d0d7de;
+    --code-bg: #f2f4f7;
+    --pre-bg: #f6f8fa;
+    --th-bg: #eef2f7;
+    --zebra: #f9fafb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 {
+    font-size: 1.9rem;
+    line-height: 1.25;
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 0.4rem;
+    margin: 0 0 1.2rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+    margin: 2.4rem 0 0.9rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+    color: var(--accent2);
+    margin: 1.8rem 0 0.6rem;
+  }
+  p { margin: 0.6rem 0; }
+  ul, ol { padding-left: 1.6rem; margin: 0.6rem 0; }
+  li { margin: 0.35rem 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    background: var(--pre-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.9rem 0 1.4rem;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.65rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--th-bg); font-weight: 650; }
+  tr:nth-child(even) td { background: var(--zebra); }
+  .meta {
+    background: var(--pre-bg);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1.1rem;
+    margin: 0 0 1.4rem;
+  }
+  .meta p { margin: 0.35rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Data Lineage POC — Architecture Diagrams (Original Design vs. Implemented)</h1>
+
+<div class="meta">
+  <p><strong>Author:</strong> <code>data-architecture</code> reviewer</p>
+  <p><strong>Date:</strong> 2026-09-04</p>
+  <p><strong>Method:</strong> the <em>original</em> architecture is the design-only exercise <code>MySQL → Debezium → Kafka → Airflow → Iceberg</code> reconstructed from STATE.md §1/§4 ("design-only → runnable + Spark") — the pre-Spark design exists only in session history. The <em>implemented</em> architecture is what the committed specs 00–07 and artifacts describe.</p>
+</div>
+
+<hr>
+
+<h2>1. Side-by-side</h2>
+
+<pre>
+  ORIGINAL (design-only)                          IMPLEMENTED (runnable docker-compose)
+  =======================                         ======================================
+
+  MySQL → Debezium → Kafka → Airflow → Iceberg    MySQL → Debezium → Kafka → Airflow → Spark → Iceberg
+  (5 hops, no Spark transform,                     (6 hops; Spark added as the ONLY transform stage)
+   no runnable stack)
+
+  hop 1  MySQL ──binlog──▶ Debezium                hop 1  mysql ──binlog──▶ connect (debezium/connect:3.6.0)
+  hop 2  Debezium ──topic──▶ Kafka                  hop 2  connect ──topic──▶ kafka (KRaft, cp-kafka:7.9.0)
+  hop 3  Kafka ──read──▶ Airflow  [design]          hop 3  kafka ──spark-submit──▶ airflow-webserver/scheduler
+  hop 4  Airflow ──write──▶ Iceberg  [design]       hop 4  airflow ──submit──▶ spark-master ──▶ spark-worker
+  hop 5  Iceberg catalog/table  [design]            hop 5  spark-worker ──read kafka:9092 + from_avro──▶ (transform)
+                                                   hop 6  spark-worker ──MERGE──▶ nessie (catalog) + minio (warehouse)
+
+  DELTA KEY
+  ─────────
+  [ADDED]  Spark hop:  spark-master, spark-worker containers, Dockerfile.spark, spark-apps/*, spark-defaults.conf
+  [ADDED]  Containers: airflow-db (postgres), nessie, minio, mc, provision  (12→13 services incl. 2 one-shot gates)
+  [ADDED]  Airflow image (Dockerfile.airflow: spark-submit client, pyiceberg, OL provider)
+  [CHANGED] Transform moves INTO Spark: Airflow is now pure orchestration (spec 01 §Key decisions #2)
+  [CHANGED] Version markers: binlog pos + Kafka offset → + kafkaOffset facet → + Iceberg snapshot id
+  [CHANGED] Lineage model: parent/child jobs (airflow:{dag}.{task} → spark:{app}); Spark run = run of record
+  [CHANGED] Precision: exact SQL vs inferred UDF split now happens IN Spark (spec 04 §4)
+  [CHANGED] Iceberg catalog: Nessie (type=nessie) + MinIO warehouse (spec 05 §2); bootstrap DDL in Spark job
+  [CHANGED] Ports: Spark UIs remapped 8082→8080 (master) / 8084→8081 (worker); Nessie 19120; MinIO 9000/9002;
+            MySQL 13306; Kafka 29092 host-only listener added
+  [CHANGED] Kafka: ZooKeeper-less KRaft single node (cp-kafka 7.9.0), auto-create topics OFF
+  [UNCHANGED] Topic naming mysql.shop.{table}; Avro + Schema Registry; snapshot-then-stream; tombstones;
+             binlog ROW + FULL + GTID; 7-day retention; deployment facet instance_id = data-lineage-poc
+</pre>
+
+<hr>
+
+<h2>2. Original — design-only architecture (5 hops, no code)</h2>
+
+<p>Reconstructed from STATE.md §1 and the agent description in <code>.opencode/agents/data-architecture.md</code> (the 5-hop intent precedes the committed baseline, which already contains the Spark hop).</p>
+
+<pre>
+              source          broker              orchestration + transform        sink
+ ┌───────────┐   binlog   ┌───────────┐  topic  ┌───────────┐     ┌─────────────┐
+ │   MySQL   │──────────▶│  Debezium │────────▶│   Kafka   │────▶│   Airflow   │────▶  Iceberg
+ │  db.table │            │ connector │         │  broker   │     │  DAG / task │       catalog.table
+ └───────────┘            └───────────┘         └───────────┘     └─────────────┘
+    dataset                   job                  dataset            job            dataset
+</pre>
+
+<p>Design-only properties:</p>
+<ul>
+  <li>No docker-compose, no Dockerfiles, no sample code (STATE.md §1: "design-only exercise").</li>
+  <li>Transforms (if any) were imagined inside the Airflow hop; no Spark stage.</li>
+  <li>Lineage model had not yet added <code>spark:{app_name}</code> child jobs or the <code>kafkaOffset</code> facet (added with the Spark hop, STATE.md §2).</li>
+  <li>Version-marker chain ended at the Kafka offset; there was no Iceberg snapshot-id capture step.</li>
+</ul>
+
+<hr>
+
+<h2>3. Implemented — runnable architecture (6 hops, 13 containers)</h2>
+
+<p>Per spec 07 §1/§2 inventory and topology, docker-compose.yml, Dockerfile.*, spark-defaults.conf.</p>
+
+<pre>
+  CDC HOP                                                     ORCHESTRATION / TRANSFORM / SINK
+ ┌───────────────┐  binlog   ┌───────────────┐  topic  ┌───────────────┐   Avro    ┌───────────────┐
+ │     mysql     │─────────▶│    connect    │───────▶│     kafka     │──────────▶│schema-registry│
+ │  mysql:8.0    │           │ debezium 3.6  │        │  cp-kafka 7.9 │           │   cp-sr 7.9    │
+ │  13306:3306   │           │  8083:8083    │        │  9092:9092    │           │  8081:8081     │
+ └───────┬───────┘           └───────┬───────┘        └───────┬───────┘           └───────────────┘
+         │ init-mysql.sql            │ POST /connectors       │ PLAINTEXT_HOST 29092 (host only)
+         │ cdc.cnf                   │ (one-shot gate)        │
+                                     ▼
+                              ┌───────────────┐
+                              │   provision   │   curlimages/curl (one-shot, restart:no)
+                              └───────────────┘
+
+ ┌───────────────┐  metadata ┌───────────────┐  spark-submit ┌───────────────┐  register ┌───────────────┐
+ │  airflow-db   │◀─────────▶│ airflow-      │──────────────▶│  spark-master │──────────▶│  spark-worker  │
+ │  postgres:16  │           │ webserver     │               │  spark 3.5.0  │           │  spark 3.5.0   │
+ │  (no host     │           │  8080:8080    │               │  8082:8080    │           │  8084:8081     │
+ │   port)       │           │ airflow-      │               │  7077 (RPC)   │           │                │
+ └───────────────┘           │ scheduler     │               └───────┬───────┘           │ reads kafka:9092│
+                             └───────────────┘                       │                    │ from_avro UDF  │
+                              both: ./dags + ./spark-apps            │                    │ MERGE → Iceberg│
+                                                                     │                    └───────┬───────┘
+                                                                     │ Nessie uri + MinIO        │ snapshot id
+                                                                     │ baked into spark-defaults │ read-back by
+                                                                     ▼                            ▼ capture_snapshot
+                                                               ┌───────────────┐          ┌───────────────┐
+                                                               │    nessie     │          │    minio      │
+                                                               │ 0.108.4 (GHCR)│          │ RELEASE.2025- │
+                                                               │ RocksDB /data │          │ 09-07, region │
+                                                               │ 19120:19120   │          │ us-east-1     │
+                                                               │  (catalog)    │          │ 9000:9000 S3  │
+                                                               └───────────────┘          │ 9002:9001 ui  │
+                                                                                          └───────┬───────┘
+                                                                                                  │ bucket
+                                                                                                  ▼
+                                                                                           ┌───────────────┐
+                                                                                           │  mc (one-shot)│
+                                                                                           │ poc-warehouse │
+                                                                                           └───────────────┘
+
+  Data flow:    mysql → connect → kafka → spark-worker → nessie + minio
+  Control flow: airflow-webserver/scheduler → spark-master → spark-worker
+  One-shot:     provision (connectors, after connect+kafka healthy), mc (bucket, after minio healthy)
+</pre>
+
+<h3>3.1 Lineage-relevant flows in the implemented stack</h3>
+
+<pre>
+ Parent job (orchestration)     airflow:load_orders.spark_load_orders        (spec 04 §3)
+ Child job  (transform)         spark:load_orders                            (spark.app.name)
+ Input dataset                  kafka:mysql.shop.orders   [inlets + subscribe] (spec 02 §Dataset)
+ Output dataset                 poc:shop_orders           [outlets + DDL + MERGE]
+ Version markers                binlog pos → Kafka offset → kafkaOffset facet → snapshot id (capture_snapshot)
+ Precision                      exact downstream of UDF (SQL); UDF path = OQ5 unresolved / overclaimed exact
+ Deployment facet instance_id   data-lineage-poc  (compose project name)
+</pre>
+
+<hr>
+
+<h2>4. Deltas annotated (original → implemented)</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Dimension</th><th>Original (design-only)</th><th>Implemented (runnable)</th><th>Annotation</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>D1</td>
+      <td>Pipeline shape</td>
+      <td>5 hops, transform inside Airflow hop</td>
+      <td>6 hops, <strong>Spark = only transform stage</strong></td>
+      <td>[ADDED] Spark hop; Airflow demoted to pure orchestration (spec 01 §Key decisions #2)</td>
+    </tr>
+    <tr>
+      <td>D2</td>
+      <td>Containers</td>
+      <td>None (design only)</td>
+      <td>13 services incl. <code>airflow-db</code>, <code>spark-master</code>, <code>spark-worker</code>, <code>nessie</code>, <code>minio</code>, <code>mc</code>, <code>provision</code></td>
+      <td>[ADDED] full compose topology (spec 07 §1)</td>
+    </tr>
+    <tr>
+      <td>D3</td>
+      <td>Spark</td>
+      <td>—</td>
+      <td>2 containers (master 8082, worker 8084) + Dockerfile.spark + spark-apps + spark-defaults.conf</td>
+      <td>[ADDED] (spec 04 §Container deployment)</td>
+    </tr>
+    <tr>
+      <td>D4</td>
+      <td>Iceberg</td>
+      <td>catalog/table (unspecified)</td>
+      <td>Nessie <code>type=nessie</code> + MinIO warehouse; DDL bootstrap in Spark job</td>
+      <td>[CHANGED] (spec 05 §2, §6)</td>
+    </tr>
+    <tr>
+      <td>D5</td>
+      <td>Kafka</td>
+      <td>ZooKeeper-based (implied)</td>
+      <td><strong>KRaft single node</strong>, no ZooKeeper, <code>KAFKA_AUTO_CREATE_TOPICS_ENABLE=false</code></td>
+      <td>[CHANGED] (docker-compose.yml <code>kafka</code>)</td>
+    </tr>
+    <tr>
+      <td>D6</td>
+      <td>Ports</td>
+      <td>unset</td>
+      <td>13306, 9092, 29092, 8081, 8083, 8080, 8082, 8084, 19120, 9000, 9002; Spark UIs remapped to avoid 8080/8081 collisions</td>
+      <td>[CHANGED] (spec 07 §4)</td>
+    </tr>
+    <tr>
+      <td>D7</td>
+      <td>Version markers</td>
+      <td>binlog pos → Kafka offset</td>
+      <td>+ <strong>kafkaOffset facet</strong> (Spark input) + <strong>Iceberg snapshot id</strong> (capture_snapshot read-back)</td>
+      <td>[CHANGED] (spec 02 §Version markers; NOTE: kafkaOffset + binlog links not actually emitted — see review R5)</td>
+    </tr>
+    <tr>
+      <td>D8</td>
+      <td>Job model</td>
+      <td>Airflow job only</td>
+      <td>parent/child: <code>airflow:{dag}.{task}</code> → <code>spark:{app_name}</code>; <strong>Spark run = run of record</strong></td>
+      <td>[CHANGED] (spec 02 §Job, spec 04 §3)</td>
+    </tr>
+    <tr>
+      <td>D9</td>
+      <td>Precision</td>
+      <td>transform precision unspecified</td>
+      <td>declarative SQL = exact; opaque UDF = inferred; absence of columnLineage = inferred</td>
+      <td>[CHANGED] (spec 04 §4; apps overclaim exact through from_avro — see review §1.4)</td>
+    </tr>
+    <tr>
+      <td>D10</td>
+      <td>Serialization</td>
+      <td>Avro + Schema Registry</td>
+      <td>retained; Spark decodes via <strong>from_avro UDF</strong> (fastavro + registry fetch)</td>
+      <td>[UNCHANGED] approach, [ADDED] implementation (spec 03 §3)</td>
+    </tr>
+    <tr>
+      <td>D11</td>
+      <td>Iceberg capture</td>
+      <td>—</td>
+      <td>pyiceberg <code>capture_snapshot</code> task + XCom snapshot id</td>
+      <td>[ADDED] (dags/load_*.py; broken as wired — review §1.3/R2)</td>
+    </tr>
+    <tr>
+      <td>D12</td>
+      <td>Lineage sink</td>
+      <td>—</td>
+      <td>console transport only; Marquez optional (not in compose)</td>
+      <td>[CHANGED] → effectively absent; lineage not persisted (review R1)</td>
+    </tr>
+    <tr>
+      <td>D13</td>
+      <td>Provisioning</td>
+      <td>—</td>
+      <td><code>init-mysql.sql</code>, <code>cdc.cnf</code>, <code>register-connectors.sh</code>, <code>mc-init.sh</code>, one-shot gates</td>
+      <td>[ADDED] (spec 07 §6)</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>5. Unchanged from the original intent (good)</h2>
+
+<ul>
+  <li>End-to-end lineage question and dataset-identity join model (spec 00 §Purpose; spec 02 §Joining rules).</li>
+  <li>Topic naming <code>mysql.shop.{table}</code>; one connector per table; snapshot-then-stream; before/after + tombstones (spec 03 §1–§2).</li>
+  <li>Avro + Schema Registry with <code>{topic}-key/-value</code> subjects feeding the schema facet (spec 03 §3).</li>
+  <li>Binlog ROW + FULL + GTID + distinct server-ids (provisioning/cdc.cnf, register-connectors.sh).</li>
+  <li>7-day Kafka retention aligned to Iceberg snapshot retention (spec 03 §2, spec 05 §3, <code>KAFKA_LOG_RETENTION_HOURS=168</code>).</li>
+  <li>Deployment facet: <code>instance_id=data-lineage-poc</code>, <code>environment=dev</code>, endpoints = service DNS names (spec 02 §Deployment, docker-compose.yml <code>name:</code>).</li>
+  <li>No Iceberg snapshot expiration in the POC (spec 05 §3).</li>
+</ul>
+
+</body>
+</html>

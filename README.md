@@ -2,7 +2,9 @@
 
 Runnable docker-compose POC for end-to-end **column-level data lineage** across a CDC +
 orchestration pipeline. The stack is authored (compose file, Dockerfiles, sample DAGs,
-sample Spark apps, provisioning scripts) but **not yet executed or tested**.
+sample Spark apps, provisioning scripts) but **not yet executed or tested**. Lineage
+metadata is collected via OpenLineage into **Marquez** (OpenLineage backend + UI,
+http://localhost:3000, API :5000), the lineage display tool for the CDC hop.
 
 ```
 MySQL → Debezium → Kafka → Airflow → Spark → Iceberg
@@ -13,14 +15,14 @@ MySQL → Debezium → Kafka → Airflow → Spark → Iceberg
 ```
 data-lineage-poc/
 ├── README.md
-├── docker-compose.yml        # full stack: MySQL, Debezium, Kafka, Airflow, Spark, Nessie, MinIO
+├── docker-compose.yml        # full stack: MySQL, Debezium, Kafka, Airflow, Spark, Nessie, MinIO, Marquez
 ├── Dockerfile.airflow        # Airflow image (spark-submit client, pyiceberg, openlineage)
 ├── Dockerfile.spark          # Spark image (Iceberg/Nessie/Kafka/OpenLineage jars baked in)
 ├── spark-defaults.conf       # Nessie catalog, S3A mirror, OpenLineage listener
 ├── dags/                     # sample DAGs (load_orders, load_customers)
 ├── spark-apps/               # sample PySpark apps (Kafka → Iceberg)
 ├── provisioning/             # init-mysql.sql, cdc.cnf, register-connectors.sh, mc-init.sh
-├── reports/                  # data-architecture review output
+├── reports/                  # data-architecture review output (markdown + human-readable HTML)
 └── specs/                    # POC design documents (00–07)
 ```
 
@@ -44,4 +46,5 @@ the variable names); no env templates are committed.
 
 Draft. The docker-compose stack and all sample code are **authored but not executed or
 tested**. Open questions and risks live in `specs/06-validation-metrics.md`; the
-data-architecture review report lives in `reports/`.
+data-architecture review report lives in `reports/` (each report ships as markdown plus
+a self-contained, human-readable HTML version).

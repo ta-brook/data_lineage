@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Lineage POC — Architecture Review</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a2e;
+    --muted: #555555;
+    --accent: #1f4e79;
+    --accent2: #2e75b6;
+    --border: #d0d7de;
+    --code-bg: #f2f4f7;
+    --pre-bg: #f6f8fa;
+    --th-bg: #eef2f7;
+    --zebra: #f9fafb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 {
+    font-size: 1.9rem;
+    line-height: 1.25;
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 0.4rem;
+    margin: 0 0 1.2rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+    margin: 2.4rem 0 0.9rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+    color: var(--accent2);
+    margin: 1.8rem 0 0.6rem;
+  }
+  p { margin: 0.6rem 0; }
+  ul, ol { padding-left: 1.6rem; margin: 0.6rem 0; }
+  li { margin: 0.35rem 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.83rem;
+    line-height: 1.4;
+    background: var(--pre-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.9rem 0 1.4rem;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.65rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--th-bg); font-weight: 650; }
+  tr:nth-child(even) td { background: var(--zebra); }
+  .meta {
+    background: var(--pre-bg);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1.1rem;
+    margin: 0 0 1.4rem;
+  }
+  .meta p { margin: 0.35rem 0; }
+  .verdict {
+    background: #fdf3f3;
+    border: 1px solid #e5b8b8;
+    border-left: 4px solid #b3261e;
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1.1rem;
+    margin: 0.9rem 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>Data Lineage POC — Architecture Review</h1>
+
+<div class="meta">
+  <p><strong>Reviewer:</strong> <code>data-architecture</code> (standing in for <code>.opencode/agents/data-architecture.md</code>)</p>
+  <p><strong>Date:</strong> 2026-09-04</p>
+  <p><strong>Method:</strong> read-only audit. All specs (00–07), deployment artifacts, agent configs, skills, and STATE.md were read; no code was run, built, or tested. Every claim cites file + section/line.</p>
+  <p><strong>Scope of review:</strong> the POC began as a <em>design-only</em> exercise (<code>MySQL → Debezium → Kafka → Airflow → Iceberg</code>) and was upgraded to a <em>runnable docker-compose stack</em> with a Spark transform stage (<code>MySQL → Debezium → Kafka → Airflow → Spark → Iceberg</code>). This review audits the written modules against the original spec intent.</p>
+</div>
+
+<hr>
+
+<h2>0. Verdict (summary)</h2>
+
+<div class="verdict">
+  <p><strong>Verdict: FIX BEFORE EXECUTION</strong> — the <em>container topology</em> is sound and internally consistent (naming, ports, pins all agree), but the <em>lineage emission — the entire point of the POC — is not actually wired to produce queryable metadata</em>, and at least one task (<code>capture_snapshot</code>) is very likely broken as written. The spec 07 runbook (§7) is therefore not yet a valid acceptance test.</p>
+</div>
+
+<p>Top blockers:</p>
+<ol>
+  <li><strong>No lineage sink.</strong> Both OL transports are <code>console</code> (compose env, DAGs, <code>spark-defaults.conf</code>). Nothing persists events, so success criteria 1–5 of spec 06 §1 ("reconstruct from metadata") cannot be exercised. Spec 02's "every event carries a deployment facet / kafkaOffset facet / snapshot marker" is aspirational — no emitter serializes them.</li>
+  <li><strong><code>capture_snapshot</code> is broken as wired.</strong> It reads <code>s3://poc-warehouse/...</code> table metadata via pyiceberg from the Airflow container, but airflow services get <strong>no MinIO endpoint/credentials</strong> (docker-compose.yml <code>airflow-env</code>), so the snapshot id read-back will fail.</li>
+  <li><strong>The version-marker chain has gaps.</strong> Binlog position is never emitted as lineage; the <code>kafkaOffset</code> facet is a custom name that openlineage-spark does not emit by default; the snapshot id lands in XCom only, never attached to a lineage record.</li>
+  <li><strong>Precision overclaim.</strong> The Spark apps claim EXACT column lineage through an opaque <code>from_avro</code> UDF, which spec 02's own rules and unresolved OQ5 say should be inferred.</li>
+  <li><strong>Stale STATE.md.</strong> It still documents <code>spark-worker 8083→8081</code> (a collision) and marks T-1..T-5 PENDING even though the work is committed.</li>
+</ol>
+
+<hr>
+
+<h2>1. Per-module review</h2>
+
+<h3>1.1 Lineage model (spec 02)</h3>
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>Finding</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Intent</td>
+      <td>Canonical dataset/job/run/facet model; deployment facet; precision rules; version markers; joining rules (specs/02-lineage-model.md §Dataset–§Joining rules).</td>
+    </tr>
+    <tr>
+      <td>Implemented</td>
+      <td>Parent/child jobs (<code>airflow:{dag}.{task}</code> → <code>spark:{app_name}</code>, §Job), <code>kafkaOffset</code> facet, deployment facet with endpoints that match the compose service names (§Deployment), precision rules incl. "absence of a columnLineage facet = inferred" (§Precision per hop), version-marker chain (§Version markers).</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td><strong>Binlog-position marker is unimplemented.</strong> §Version markers says binlog position is the MySQL→Debezium marker; nothing in the artifacts emits it as lineage metadata. It exists only inside the Debezium envelope <code>source</code> block, which the Spark apps discard (spark-apps/load_orders.py §Step 3).</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td><strong><code>kafkaOffset</code> facet is an assumed, non-standard facet.</strong> No OL artifact emits a facet of that name. spec 06 §Open questions #7 already acknowledges the Airflow-vs-Spark namespace mismatch (<code>kafka</code> vs <code>kafka://...</code>); the marker claim in §Version markers rests on tooling that is unverified.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td><strong>Snapshot id never joins the lineage model.</strong> spec 02 §Rule says a run must carry both <code>kafkaOffset</code> (input) and snapshot id (output). The snapshot id is captured to Airflow XCom only (dags/load_orders.py <code>capture_snapshot</code>); no lineage event carries it. §Lineage events step 3 claims the Spark run emits it — it does not in the artifacts.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td>The identity table (§Dataset) maps logical <code>orders</code> → MySQL <code>shop.orders</code> → topic <code>mysql.shop.orders</code> → <strong>Iceberg <code>poc.shop_orders</code></strong> without documenting the <code>orders → shop_orders</code> rename. spec 01 §Design-time risks #1 ("renames break lineage joins") is thus materialized by design and not called out.</td>
+    </tr>
+    <tr>
+      <td>Broken</td>
+      <td>No artifact emits any lineage event at all beyond console logging; §Deployment's "facet carried on every event" and §Timeline are unimplemented in the runnable stack.</td>
+    </tr>
+    <tr>
+      <td>Recommendation</td>
+      <td>(a) Stand up a real OL sink (Marquez or OL HTTP) or explicitly descope success criteria 1–5; (b) resolve OQ5 (from_avro precision) in spec 02 and stop claiming exact through the UDF; (c) document the <code>orders→shop_orders</code> table mapping; (d) either implement a binlog-position capture or strike it from the marker table.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1.2 CDC hop (spec 03 + provisioning)</h3>
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>Finding</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Intent</td>
+      <td>One connector per table; snapshot-then-stream; before/after images + tombstones; topic-per-table keyed by MySQL PK; Avro + Schema Registry; subjects <code>{topic}-key/-value</code>; envelope vs <code>after</code> schema distinction; exact passthrough precision; binlog ROW + FULL; distinct server-ids (specs/03-debezium-kafka-spec.md §1–§5).</td>
+    </tr>
+    <tr>
+      <td>Implemented</td>
+      <td>Matches: topic naming via <code>topic.prefix=mysql</code> + <code>database.include.list=shop</code> + <code>table.include.list</code> (provisioning/register-connectors.sh); <code>snapshot.mode=initial</code>, <code>tombstones.on.delete=true</code>; Avro converters + registry URL (§3); <code>database.server.id</code> 223345/223346 ≠ MySQL <code>server-id</code> 223344 (register-connectors.sh vs provisioning/cdc.cnf); binlog ROW/FULL/GTID/604800s (cdc.cnf); debezium replication user with correct grants (provisioning/init-mysql.sql); compose services match the spec 03 container table (docker-compose.yml <code>mysql</code>/<code>kafka</code>/<code>schema-registry</code>/<code>connect</code>).</td>
+    </tr>
+    <tr>
+      <td>Broken/risky</td>
+      <td>register-connectors.sh sets <strong>both</strong> <code>database.server.name: mysql</code> (§register-connectors.sh line 47) <strong>and</strong> <code>topic.prefix: mysql</code> (line 58). In Debezium 3.x <code>topic.prefix</code> is the canonical property; the legacy <code>database.server.name</code> is redundant and may be rejected as a duplicate/conflicting config, failing the one-shot <code>provision</code> gate. spec 03 mentions only <code>topic.prefix</code>.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td><code>debezium/connect</code> is being phased off Docker Hub (Debezium now publishes to quay.io; the Hub page announces relocation). Pulls still work today but the pin is on a deprecated registry.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td>Binlog position is never surfaced as lineage metadata (see 1.1). spec 03 §5 promises it as a run/version marker but only the payload carries it.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td>Topic-naming convention string is inconsistent: specs 01/02/03 say <code>mysql.{db}.{schema}.{table}</code>; MySQL has no separate schema, and register-connectors.sh's own comment says <code>mysql.{db}.{table}</code>. Cosmetic, but the convention is the lineage join key — make it exact.</td>
+    </tr>
+    <tr>
+      <td>Recommendation</td>
+      <td>Remove <code>database.server.name</code> from both connector payloads (keep <code>topic.prefix</code>); move the Connect pin to <code>quay.io/debezium/connect:3.6.0</code>; normalize the topic-naming string in specs 01/02/03.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1.3 Orchestration hop (spec 04 + Dockerfile.airflow + dags/)</h3>
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>Finding</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Intent</td>
+      <td>DAG per dataset; SparkSubmitOperator deploy-mode cluster; OpenLineage parent/child (parentRun facet); Spark run is the run of record; <code>capture_snapshot</code> pyiceberg read-back of snapshot id; output dataset declared as <code>poc.{table}</code> (specs/04-airflow-spec.md §1–§6).</td>
+    </tr>
+    <tr>
+      <td>Implemented</td>
+      <td>Two DAGs (<code>load_orders</code>, <code>load_customers</code>) with matching SparkSubmitOperator (<code>conn_id=spark_default</code>, <code>master=spark://spark-master:7077</code>, <code>deploy_mode=cluster</code>, <code>name=load_orders</code>, <code>inlets=[Dataset("kafka", …)]</code>, <code>outlets=[Dataset("poc", "shop_orders")]</code>); <code>capture_snapshot</code> PythonOperator with pyiceberg Nessie catalog; <code>config.py</code> centralizes topic/table/master constants; Dockerfile.airflow installs the two providers + pyiceberg + pyspark 3.5.0; no <code>airflow-init</code> (entrypoint runs <code>airflow db migrate</code>), matching spec 04 §Container deployment note.</td>
+    </tr>
+    <tr>
+      <td>Broken</td>
+      <td><strong><code>capture_snapshot</code> lacks MinIO wiring.</strong> It loads <code>s3://poc-warehouse/poc/shop_orders</code> metadata (dags/load_orders.py <code>capture_snapshot</code>; the Nessie server only stores pointers — spec 05 §2). pyiceberg's default file IO (PyArrowFileIO) will try AWS S3 without credentials; the Airflow containers receive <strong>no</strong> <code>MINIO_*</code>/S3 endpoint env (docker-compose.yml <code>airflow-env</code> anchor; <code>.env.example</code> has the creds but they are not passed to airflow-*). The read-back — spec 04 §3's output version marker — will fail.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td>Spec 04 §3 says the snapshot id is "attached as the output version marker"; the artifact only pushes it to XCom and logs it. It is not attached to any lineage record.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td>parent/child correlation relies on the Airflow OL provider injecting <code>spark.openlineage.parentJobName/parentRunId</code> (spec 04 §3). No config sets these explicitly and spec 04 §6's stated fallback ("read app id from operator") is not implemented. spec 06 §Risks lists runId correlation as a verify-at-test-time item — it remains unverified and unwired.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td>OL events go to <code>{"type":"console"}</code> (compose env, DAG <code>conf.set</code>, spark-defaults). Nothing is persisted; the "run of record" cannot be inspected.</td>
+    </tr>
+    <tr>
+      <td>Minor</td>
+      <td>DAGs call <code>conf.set("openlineage", …)</code> at import/parse time — a process-global mutation that duplicates the compose env var; fragile but harmless. <code>import config</code> relies on Airflow putting the dags dir on <code>sys.path</code> (works, but the module name <code>config</code> is generic).</td>
+    </tr>
+    <tr>
+      <td>Recommendation</td>
+      <td>Wire <code>MINIO_ROOT_USER/PASSWORD</code> + <code>AWS_ENDPOINT_URL=http://minio:9000</code> (and pyiceberg <code>py-io-impl</code>) into the Airflow env — or move snapshot capture into the Spark job and emit a real snapshot version facet; add an OL sink; explicitly set the Spark parent conf or implement the fallback.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1.4 Transform hop (spark-apps/ + Dockerfile.spark + spark-defaults.conf)</h3>
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>Finding</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Intent</td>
+      <td>Declarative SQL = exact; opaque UDF = inferred; absence of columnLineage = inferred (spec 04 §4 / spec 02 §Precision). Deterministic <code>from_avro</code> exact-or-inferred is <strong>unresolved</strong> (spec 02 §Open questions #5).</td>
+    </tr>
+    <tr>
+      <td>Implemented</td>
+      <td>Both apps: <code>from_avro</code> UDF (fastavro + per-schema-id registry fetch, 5-byte header strip), envelope → <code>(after, op)</code>; declarative SELECT (1:1 passthrough; <code>total_price</code> derived in SQL); <code>MERGE INTO</code> upsert; DDL bootstrap of <code>nessie.poc.*</code>; spark image bakes in all jars (Dockerfile.spark) — every pin verified to exist on Maven Central (iceberg 1.11.0, nessie-ext 0.108.4, openlineage 1.52.0, spark 3.5.0); spark-defaults.conf configures the Nessie catalog, S3A mirror, OL listener, and SQL extensions.</td>
+    </tr>
+    <tr>
+      <td>Drift / overclaim</td>
+      <td><strong>Precision contradiction.</strong> The apps claim "EXACT column lineage" for columns that arrive through the opaque <code>from_avro</code> UDF (spark-apps/load_orders.py §Step 4; load_customers.py §Step 4). Per spec 02 §Precision per hop ("opaque UDF → inferred/lost") and the <em>unresolved</em> OQ5, this is at best inferred upstream of the UDF. The exactness is only provable for the SELECT downstream of the UDF. The implementation unilaterally resolves OQ5 in favor of "exact" without updating spec 02/06.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td><code>startingOffsets=earliest</code> / <code>endingOffsets=latest</code> (both apps §Step 2) re-read the <strong>entire topic</strong> every scheduled run. The <code>kafkaOffset</code> "version marker" is therefore a constant <code>[0, end]</code> range — it cannot distinguish run N from run N+1 and does not advance like a checkpoint (spec 02 §Version markers intent). Idempotent via MERGE, but the marker semantics are degenerate and the re-scan grows with the 7-day topic.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td><strong>Deletes silently dropped.</strong> spec 03 §1 mandates tombstones (<code>tombstones.on.delete=true</code>); the apps filter <code>op='d'</code> and <code>after=null</code> ("deletes are out of POC scope"). The Iceberg table therefore diverges from MySQL under source deletes, and spec 05's "idempotent upsert" (§5) overstates table currency. Scope cut is undocumented in specs 02/05/07.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td>spec 05 §1 says the Iceberg schema maps 1:1 back to MySQL columns; the apps add a derived <code>total_price</code> column not in MySQL. Minor, but it violates the stated 1:1 claim.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td>UDF named <code>from_avro</code> shadows Spark's built-in <code>from_avro(data, jsonFormatSchema)</code> (spark-avro jar is baked in). Resolution order is generally UDF-first, but the collision is a runtime risk. The spark-avro jar itself is unused (fastavro is used).</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td>Envelope <code>source</code> block (binlog pos/gtid) is discarded at decode, reinforcing the missing binlog marker (1.1). Fixed <code>AFTER_SCHEMA</code> means additive MySQL columns decode but are dropped silently — schema facet and lineage break on evolution (spec 02 OQ3 unresolved).</td>
+    </tr>
+    <tr>
+      <td>Minor</td>
+      <td>spark-defaults.conf hardcodes MinIO creds (<code>pocadmin</code>/<code>minio-poc-secret</code>) matching <code>.env.example</code> — consistent (spec 07 §5 note) but committed secrets (POC-only by design).</td>
+    </tr>
+    <tr>
+      <td>Recommendation</td>
+      <td>(a) Resolve OQ5 explicitly: mark UDF-produced columns inferred or prove exactness, and update spec 02/04; (b) decide delete handling (drop-and-document, or propagate deletes); (c) either accept constant-range markers as "cumulative re-scan" or move to checkpointed offsets; (d) rename the UDF (e.g. <code>confluent_from_avro</code>) to avoid the builtin clash; (e) document <code>total_price</code> as a derived column in spec 05 §1.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1.5 Sink hop (spec 05 + Nessie/MinIO/mc)</h3>
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>Finding</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Intent</td>
+      <td>Table-per-topic; Nessie (<code>type=nessie</code>, client-side S3) + MinIO; no snapshot expiration; identity <code>poc.shop_orders</code>; snapshot id + Nessie commit hash enrichment; Spark DDL bootstrap; <code>mc</code> bucket gate (specs/05-iceberg-spec.md §1–§5).</td>
+    </tr>
+    <tr>
+      <td>Implemented</td>
+      <td>Matches: <code>nessie</code> (GHCR 0.108.4, RocksDB at <code>/data/nessie</code>), <code>minio</code> (pinned, region us-east-1), <code>mc</code> one-shot bucket <code>poc-warehouse</code>; catalog config in spark-defaults.conf (<code>type=nessie</code>, <code>uri=http://nessie:19120/api/v2</code>, <code>ref=main</code>, <code>warehouse=s3://poc-warehouse/</code>, S3FileIO, path-style, creds); table locations <code>s3://poc-warehouse/poc/shop_orders</code>; DDL bootstrap inside the apps (spec 05 §6).</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td><strong>Nessie commit hash and writer-metadata facets are specified but unimplemented.</strong> spec 05 §5 exposes <code>GET /api/v2/trees/main</code> hash and snapshot-summary writer metadata; no artifact captures either (spec 02 §Version markers correctly calls the hash "optional enrichment" — but spec 05 presents it as part of the sink's exposed lineage metadata).</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td>spec 07 §4's rationale "Nessie pulled from GHCR (no UI on 9000)" is <strong>inaccurate</strong>: the GHCR Nessie image does expose a UI on container port 9000 (Nessie docs: <code>docker run -p 19120:19120 -p 9000:9000 ghcr.io/projectnessie/nessie</code>). There is no host collision only because the compose file does not publish 9000 for <code>nessie</code>. Outcome safe, reasoning wrong.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td>The Nessie healthcheck uses <code>bash -c 'exec 3&lt;&gt;/dev/tcp/localhost/19120'</code> (docker-compose.yml <code>nessie</code>). If the Nessie (Quarkus) image has no <code>bash</code>, <code>nessie</code> never becomes healthy and <code>spark-master</code> (depends_on <code>service_healthy</code>) never starts — a stack-wide gate. Unverified.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td><code>mc</code> is not a dependency of <code>spark-master</code>; a DAG triggered before <code>mc</code> runs fails at DDL (acknowledged in spec 07 §6). Startup race is narrow but real.</td>
+    </tr>
+    <tr>
+      <td>Recommendation</td>
+      <td>Wire a bash-less Nessie healthcheck (curl/wget or an HTTP probe) or confirm bash presence; either implement the commit-hash capture or downgrade it in spec 05 to optional; consider <code>mc</code> → spark-master dependency.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1.6 Deployment (spec 07 + docker-compose.yml + .env.example)</h3>
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>Finding</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Intent</td>
+      <td>13 services, one bridge network <code>lineage-poc</code>, project <code>data-lineage-poc</code> = deployment facet <code>instance_id</code>, collision-free port remap, per-service env wiring, depends_on + healthchecks, two one-shot gates, bring-up runbook (specs/07-deployment-docker.md §1–§7).</td>
+    </tr>
+    <tr>
+      <td>Implemented</td>
+      <td>docker-compose.yml matches the spec 07 inventory table exactly: same services, images, host ports, volumes (5 named + 6 bind), env anchors, healthchecks, one-shot gates (<code>mc</code>, <code>provision</code>, <code>restart: "no"</code>), and runbook. Port table is collision-free: 13306/9092/8081/8083/8080/8082/8084/19120/9000/9002 (spec 07 §4).</td>
+    </tr>
+    <tr>
+      <td>Contradiction</td>
+      <td><strong>STATE.md §3 T-1.4 still says <code>spark-worker UI 8083→8081</code></strong> — a collision with Connect (8083) and contradicted by docker-compose.yml (<code>8084:8081</code>) and spec 07 §4 (which explicitly notes the STATE.md draft was fixed). The resume file was never updated.</td>
+    </tr>
+    <tr>
+      <td>Contradiction</td>
+      <td><strong>STATE.md §3 marks T-1..T-5 PENDING</strong>, but spec 07, all artifacts, the README update, and the <code>data-architecture</code> agent are committed (git log: 5392acf, 25f7fc7, c1a1b66, bb9408c, b210048, ae21917, 5e08efd). Following STATE.md's resume instructions would redo completed work. STATE.md §2's note ("specs 03–06 not re-verified") is consistent with the drift found in 1.3–1.5.</td>
+    </tr>
+    <tr>
+      <td>Drift</td>
+      <td>spec 06 §Risks lists the collision set as "8080/8081/8083/9000/9001" — missing the final 8082/8084/9002/13306/19120 remaps. Stale risk table.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td><code>.env.example</code> ships <code>FERNET_KEY=</code> empty; the runbook (spec 07 §7) says to fill it — fine, but a bare <code>cp .env.example .env</code> boot fails.</td>
+    </tr>
+    <tr>
+      <td>Risky</td>
+      <td><code>provision</code> gates on connect+kafka healthy but <strong>not</strong> mysql healthy; connectors register before MySQL is reachable and self-heal. Acceptable, but connector status may flap during startup.</td>
+    </tr>
+    <tr>
+      <td>Note</td>
+      <td>All pinned images/jars are <strong>real and current</strong> (verified against Maven Central/registries, 2026 dates): airflow 2.11.0, nessie 0.108.4 + ext 0.108.4, iceberg 1.11.0, openlineage 1.52.0, cp-kafka/sr 7.9.0, debezium 3.6.0, postgres 16, spark 3.5.0, minio RELEASE.2025-09-07. The one registry caveat is Debezium's move to quay.io (1.2).</td>
+    </tr>
+    <tr>
+      <td>Recommendation</td>
+      <td>Update STATE.md (T-statuses + port 8084) and spec 06's collision set; add <code>MINIO_*</code>/S3 endpoint env to Airflow; note in the runbook that <code>.env</code> must fill FERNET_KEY before boot.</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>2. Cross-cutting consistency table</h2>
+<table>
+  <thead>
+    <tr><th>Check</th><th>Expected</th><th>Observed</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Topic names <code>mysql.shop.orders</code> / <code>mysql.shop.customers</code></td>
+      <td>Same string in specs 02/03/04/07 and artifacts</td>
+      <td>specs/02 §Dataset; 03 §4; 04 §1; 07 §7; dags/config.py; both apps; register-connectors.sh</td>
+      <td>OK</td>
+    </tr>
+    <tr>
+      <td>Iceberg identities <code>poc.shop_orders</code> / <code>poc.shop_customers</code></td>
+      <td>Same string in specs 02/04/05/07 and artifacts</td>
+      <td>specs/02 §Dataset; 04 §5; 05 §4; 07 §7; dags/config.py; DAG outlets; apps (DDL + MERGE)</td>
+      <td>OK</td>
+    </tr>
+    <tr>
+      <td>Service names vs deployment facet endpoints</td>
+      <td>Spec 02 facet endpoints resolve to compose services</td>
+      <td><code>mysql:3306</code>, <code>kafka:9092</code>, <code>connect:8083</code>, <code>schema-registry:8081</code>, <code>spark://spark-master:7077</code>, <code>nessie:19120/api/v2</code>, <code>s3://poc-warehouse/</code> all match docker-compose.yml</td>
+      <td>OK</td>
+    </tr>
+    <tr>
+      <td><code>instance_id</code> = project name</td>
+      <td><code>data-lineage-poc</code></td>
+      <td>docker-compose.yml <code>name:</code>; spec 07 §Scope; spec 02 §Deployment</td>
+      <td>OK</td>
+    </tr>
+    <tr>
+      <td>Host port collisions (8080/8081/8082/8083/8084/9000/9001/9002/13306/19120)</td>
+      <td>None</td>
+      <td>spec 07 §4 remap table == compose ports</td>
+      <td>OK (but STATE.md §3 still says 8083→8081 — stale)</td>
+    </tr>
+    <tr>
+      <td>Image/jar pins consistent</td>
+      <td>Same pins across specs 03/04/05/07, Dockerfiles, STATE.md</td>
+      <td>All agree; all pins verified to exist (2026)</td>
+      <td>OK</td>
+    </tr>
+    <tr>
+      <td>Version-marker chain binlog → offset → kafkaOffset → snapshot</td>
+      <td>Each link emitted by an artifact</td>
+      <td>Binlog pos: not emitted. <code>kafkaOffset</code>: not a real OL facet, unverified. Snapshot id: XCom only, not in a lineage record.</td>
+      <td>BROKEN</td>
+    </tr>
+    <tr>
+      <td>Precision rule "absence of columnLineage = inferred"</td>
+      <td>Honored in spec 04 and the apps</td>
+      <td>spec 04 §4 restates it; the apps claim exact through an opaque UDF (OQ5 unresolved)</td>
+      <td>DRIFTED</td>
+    </tr>
+    <tr>
+      <td>No Iceberg snapshot expiration</td>
+      <td>Aligns with Kafka 7d retention</td>
+      <td>spec 03 §2, spec 05 §3, compose <code>KAFKA_LOG_RETENTION_HOURS=168</code></td>
+      <td>OK (trivially — nothing expires)</td>
+    </tr>
+    <tr>
+      <td>One-shot gates</td>
+      <td><code>mc</code> (bucket) + <code>provision</code> (connectors) run once and exit 0</td>
+      <td>docker-compose.yml <code>mc</code>, <code>provision</code> with <code>restart: "no"</code>; spec 07 §6</td>
+      <td>OK</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>3. Unresolved contradictions (documented, not silently fixed)</h2>
+<ol>
+  <li><strong>STATE.md §3 T-1.4</strong> (<code>spark-worker UI 8083→8081</code>) vs <strong>docker-compose.yml</strong> (<code>8084:8081</code>) and <strong>spec 07 §4</strong> (which explicitly calls the 8083→8081 draft a collision with Connect). STATE.md was never updated.</li>
+  <li><strong>STATE.md §3</strong> marks T-1..T-5 PENDING, but the work is committed (spec 07 + all artifacts + agent + README). The resume file would redo completed work.</li>
+  <li><strong>spec 04 §3</strong> "capture_snapshot attaches the snapshot id as the output version marker" vs the artifact (XCom + log only) and vs the wiring (no MinIO config in the Airflow container — read-back will fail).</li>
+  <li><strong>spec 02/04 precision rules</strong> ("opaque UDF = inferred"; OQ5 unresolved) vs <strong>spark-apps/</strong> claiming EXACT for columns decoded by the <code>from_avro</code> UDF.</li>
+  <li><strong>spec 03 §1 tombstone design</strong> (<code>tombstones.on.delete=true</code>) vs <strong>spark-apps/</strong> dropping <code>op='d'</code>/<code>after=null</code> — an undocumented scope cut that makes the Iceberg table diverge from MySQL under source deletes.</li>
+  <li><strong>spec 05 §5</strong> "exposes Nessie commit hash + writer metadata" vs no artifact capturing either.</li>
+  <li><strong>spec 07 §4</strong> "GHCR Nessie has no UI on 9000" — inaccurate; the GHCR image does expose a UI on 9000 (Nessie docs). No collision exists only because 9000 is unpublished for <code>nessie</code>.</li>
+  <li><strong>specs 01/02/03</strong> topic convention <code>mysql.{db}.{schema}.{table}</code> vs <strong>register-connectors.sh</strong> comment (and Debezium reality) <code>mysql.{db}.{table}</code> (schema is vacuous in MySQL).</li>
+  <li><strong>spec 06 §Risks</strong> collision set ("8080/8081/8083/9000/9001") vs the final remap set (8082/8084/9002/13306/19120 added).</li>
+  <li><strong>spec 05 §1</strong> "schema maps 1:1 to MySQL columns" vs the apps adding a derived <code>total_price</code> column.</li>
+</ol>
+
+<hr>
+
+<h2>4. Consolidated risk register</h2>
+<table>
+  <thead>
+    <tr><th>#</th><th>Risk</th><th>Impact</th><th>Confidence</th><th>Recommendation</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>R1</td>
+      <td>No lineage sink (console transport everywhere)</td>
+      <td>Success criteria 1–5 unverifiable</td>
+      <td>High</td>
+      <td>Add Marquez or OL HTTP transport, or descope</td>
+    </tr>
+    <tr>
+      <td>R2</td>
+      <td><code>capture_snapshot</code> cannot reach MinIO from Airflow</td>
+      <td>Snapshot marker never produced; task fails</td>
+      <td>High</td>
+      <td>Wire <code>MINIO_*</code> + <code>AWS_ENDPOINT_URL</code> (+ pyiceberg <code>py-io-impl</code>) into airflow-*</td>
+    </tr>
+    <tr>
+      <td>R3</td>
+      <td>Nessie healthcheck needs <code>bash</code> in the image</td>
+      <td><code>nessie</code> never healthy → <code>spark-master</code> gated → stack stalls</td>
+      <td>Medium</td>
+      <td>Use curl/wget probe or verify bash</td>
+    </tr>
+    <tr>
+      <td>R4</td>
+      <td><code>database.server.name</code> + <code>topic.prefix</code> both set</td>
+      <td>Connector config rejected → <code>provision</code> gate fails</td>
+      <td>Medium</td>
+      <td>Drop <code>database.server.name</code></td>
+    </tr>
+    <tr>
+      <td>R5</td>
+      <td><code>kafkaOffset</code> / binlog markers never emitted</td>
+      <td>Version-marker chain incomplete</td>
+      <td>High</td>
+      <td>Implement or descope in spec 02</td>
+    </tr>
+    <tr>
+      <td>R6</td>
+      <td><code>earliest→latest</code> full re-read each run</td>
+      <td>Marker degenerate; unbounded re-scan</td>
+      <td>Medium</td>
+      <td>Accept as cumulative or use checkpointed offsets</td>
+    </tr>
+    <tr>
+      <td>R7</td>
+      <td>Deletes dropped silently</td>
+      <td>Iceberg diverges from MySQL</td>
+      <td>Medium</td>
+      <td>Document or propagate deletes</td>
+    </tr>
+    <tr>
+      <td>R8</td>
+      <td>from_avro UDF shadows Spark builtin</td>
+      <td>Runtime resolution ambiguity</td>
+      <td>Low-Medium</td>
+      <td>Rename UDF</td>
+    </tr>
+    <tr>
+      <td>R9</td>
+      <td>Unverified parent/child runId injection</td>
+      <td>Parent/child join fails</td>
+      <td>Medium</td>
+      <td>Set conf explicitly or implement fallback</td>
+    </tr>
+    <tr>
+      <td>R10</td>
+      <td>Additive schema evolution silently dropped</td>
+      <td>Lineage breaks on column add</td>
+      <td>Medium</td>
+      <td>Handle or document (OQ3)</td>
+    </tr>
+    <tr>
+      <td>R11</td>
+      <td>Debezium Docker Hub deprecation</td>
+      <td>Image pull may break later</td>
+      <td>Low</td>
+      <td>Pin <code>quay.io/debezium/connect:3.6.0</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>5. Overall verdict</h2>
+
+<div class="verdict">
+  <p><strong>FIX BEFORE EXECUTION</strong> (do not treat the spec 07 runbook as a passing acceptance test yet).</p>
+</div>
+
+<p>What is sound: the naming model (topics, Iceberg identities, service names, <code>instance_id</code>), the port remap, the image/jar pins (all real and current), the compose↔spec 07 parity, the CDC binlog/connector setup, and the DAG→app→MERGE structure.</p>
+
+<p>What must be fixed first, in order:</p>
+<ol>
+  <li>Stand up a lineage sink (or explicitly descope success criteria 1–5).</li>
+  <li>Wire MinIO access into the Airflow container (or move snapshot capture into Spark).</li>
+  <li>Resolve the precision contradiction for the <code>from_avro</code> UDF (OQ5).</li>
+  <li>Reconcile STATE.md (port 8084, todo statuses) and spec 06 (collision set, risk table).</li>
+  <li>Decide delete handling; drop <code>database.server.name</code>; verify the Nessie healthcheck.</li>
+</ol>
+
+<p>After those, the stack is a credible acceptance test for the <em>topology</em>; the <em>lineage</em> claim still needs the sink to prove the version-marker chain end-to-end.</p>
+
+</body>
+</html>
