@@ -196,8 +196,16 @@ services:
     ports:
       - "8082:8080" # Spark master UI (host remap avoids 8080 collision with Airflow)
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master --port 7077 --webui-port 8080
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pocadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - ./spark-apps:/opt/spark-apps # driver/executors read the app file
+    depends_on:
+      nessie:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/')\""]
       interval: 10s
@@ -214,6 +222,9 @@ services:
     ports:
       - "8084:8081" # Spark worker UI (host remap; 8083 is taken by Connect)
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077 --webui-port 8081
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pocadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - ./spark-apps:/opt/spark-apps
     depends_on:
@@ -232,9 +243,10 @@ services:
     ports:
       - "19120:19120"
     environment:
-      NESSIE_VERSION_STORE_TYPE: INMEMORY # POC: no persistence; volume reserved for future DB-backed store
+      NESSIE_VERSION_STORE_TYPE: ROCKSDB # persists catalog metadata to the named volume (spec 05)
+      NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH: /data/nessie
     volumes:
-      - nessie-data:/var/lib/nessie
+      - nessie-data:/data
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/19120'"]
       interval: 10s
@@ -252,6 +264,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pocadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_REGION: us-east-1 # S3 clients (S3FileIO) expect a region (spec 05)
     volumes:
       - minio-data:/data
     healthcheck:
