@@ -1,0 +1,24 @@
+# Airflow image for the data-lineage POC (Kafka -> Airflow -> Spark -> Iceberg).
+#
+# Airflow is PURE ORCHESTRATION in this hop: it submits Spark apps
+# (SparkSubmitOperator) and reads back Iceberg snapshot ids (pyiceberg). It never
+# moves data itself.
+#
+# Why this image is deliberately thin:
+# - deploy-mode cluster keeps the Spark DRIVER on a Spark worker, so the Airflow
+#   container only needs the spark-submit client (pyspark) to submit the app.
+# - The Iceberg runtime / Nessie / Kafka / OpenLineage jars live in the Spark image
+#   (Dockerfile.spark), NOT here. Installing them here would duplicate jars and risk
+#   version drift between the submitter and the executor.
+# - confluent-kafka is intentionally NOT installed: Airflow never talks to Kafka;
+#   only the Spark app (running on the worker) consumes topics.
+
+FROM apache/airflow:2.11.0
+
+USER root
+RUN pip install --no-cache-dir \
+        apache-airflow-providers-apache-spark \
+        apache-airflow-providers-openlineage \
+        "pyiceberg[nessie,pyarrow,s3fs]" \
+        pyspark==3.5.0
+USER airflow
