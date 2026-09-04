@@ -7,7 +7,8 @@
 # lineage datasets from spec 02:
 #   shop-orders    -> mysql.shop.orders
 #   shop-customers -> mysql.shop.customers
-# Topic naming: topic.prefix=mysql + database.include.list=shop +
+# Topic naming comes solely from topic.prefix (Debezium 3.x; database.server.name
+# was removed in 3.x). topic.prefix=mysql + database.include.list=shop +
 # table.include.list=<table> => mysql.{db}.{table}. Do not change these names;
 # they are the join key between the MySQL and Kafka datasets in the lineage model.
 
@@ -32,6 +33,9 @@ echo "Connect is ready"
 # database.server.id (223345/223346) MUST differ from the MySQL server-id
 # (223344, see cdc.cnf): the connector registers as a replica client and a
 # duplicate server-id would break binlog streaming.
+# Topic names come solely from topic.prefix=mysql (Debezium 3.x removed
+# database.server.name): mysql.shop.orders / mysql.shop.customers are the
+# lineage dataset identities from spec 02.
 # Avro converters + schema registry => registry subjects {topic}-key/-value
 # carry the event schema that feeds the lineage schema facet (spec 03, sec 3).
 
@@ -44,7 +48,6 @@ ORDERS_PAYLOAD='{
     "database.user": "debezium",
     "database.password": "debezium-poc",
     "database.server.id": "223345",
-    "database.server.name": "mysql",
     "database.include.list": "shop",
     "table.include.list": "shop.orders",
     "schema.history.internal.kafka.topic": "mysql-schema-history",
@@ -68,7 +71,6 @@ CUSTOMERS_PAYLOAD='{
     "database.user": "debezium",
     "database.password": "debezium-poc",
     "database.server.id": "223346",
-    "database.server.name": "mysql",
     "database.include.list": "shop",
     "table.include.list": "shop.customers",
     "schema.history.internal.kafka.topic": "mysql-schema-history",
