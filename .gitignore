@@ -1,0 +1,6 @@
+# Environment files — never commit real or template secrets
+.env
+.env.*
+
+# Internal opencode tooling (agent configs + skills) — team-internal, not shipped
+.opencode/

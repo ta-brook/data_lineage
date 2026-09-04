@@ -20,34 +20,12 @@ data-lineage-poc/
 ├── dags/                     # sample DAGs (load_orders, load_customers)
 ├── spark-apps/               # sample PySpark apps (Kafka → Iceberg)
 ├── provisioning/             # init-mysql.sql, cdc.cnf, register-connectors.sh, mc-init.sh
-├── .env.example              # env var template
-├── reports/                  # data-architecture review output (created by the review)
-├── .opencode/
-│   ├── agents/               # 7 opencode agents (1 primary + 6 subagents)
-│   └── skills/               # 4 skills for lineage/CDC/Airflow/Iceberg design
+├── reports/                  # data-architecture review output
 └── specs/                    # POC design documents (00–07)
 ```
 
-## Agents
-
-| Agent | Mode | Role |
-|---|---|---|
-| `poc-orchestrator` | primary | Coordinates the POC, delegates to subagents, owns specs 00/01/06/07 |
-| `lineage-designer` | subagent | Lineage metadata model (spec 02) |
-| `debezium-expert` | subagent | CDC + Kafka hop (spec 03) |
-| `airflow-expert` | subagent | Airflow + OpenLineage hop (spec 04) |
-| `iceberg-expert` | subagent | Iceberg sink (spec 05) |
-| `poc-docs-writer` | subagent | Consolidates findings into specs |
-| `data-architecture` | subagent | Senior data architect; reviews all modules against the original specs; produces `reports/architecture-review.md` + diagram |
-
-## Skills
-
-| Skill | Use for |
-|---|---|
-| `lineage-modeling` | Designing/reviewing lineage metadata, datasets, jobs, runs, facets |
-| `debezium-cdc` | Designing/reviewing the Debezium + Kafka hop |
-| `airflow-openlineage` | Designing/reviewing the Airflow + OpenLineage hop |
-| `iceberg-lakehouse` | Designing/reviewing the Iceberg sink |
+Environment variables are provided via a local `.env` file (see the compose file for
+the variable names); no env templates are committed.
 
 ## Specs
 
@@ -61,16 +39,6 @@ data-lineage-poc/
 | `05-iceberg-spec.md` | Tables, catalog evaluation, snapshot lifecycle |
 | `06-validation-metrics.md` | Success criteria, risks, open questions |
 | `07-deployment-docker.md` | docker-compose topology, bring-up, validation |
-
-## How to use
-
-1. Open opencode in this directory.
-2. Switch to `poc-orchestrator` (primary) and ask it to drive a section of the POC, e.g.
-   *"design the lineage model"* — it will dispatch to the specialized subagents.
-3. Or invoke a subagent directly with `@name`, e.g. `@debezium-expert draft the CDC hop`.
-
-**Note:** after adding/changing agents or skills, quit and restart opencode for the new
-config to load.
 
 ## Status
 
