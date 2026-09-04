@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Lineage POC — Airflow → Spark → Iceberg Hop Review (HOP-01)</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a2e;
+    --muted: #555555;
+    --accent: #1f4e79;
+    --accent2: #2e75b6;
+    --border: #d0d7de;
+    --code-bg: #f2f4f7;
+    --pre-bg: #f6f8fa;
+    --th-bg: #eef2f7;
+    --zebra: #f9fafb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 {
+    font-size: 1.9rem;
+    line-height: 1.25;
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 0.4rem;
+    margin: 0 0 1.2rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+    margin: 2.4rem 0 0.9rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+    color: var(--accent2);
+    margin: 1.8rem 0 0.6rem;
+  }
+  p { margin: 0.6rem 0; }
+  ul, ol { padding-left: 1.6rem; margin: 0.6rem 0; }
+  li { margin: 0.35rem 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.83rem;
+    line-height: 1.4;
+    background: var(--pre-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.9rem 0 1.4rem;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.65rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--th-bg); font-weight: 650; }
+  tr:nth-child(even) td { background: var(--zebra); }
+  .meta {
+    background: var(--pre-bg);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1.1rem;
+    margin: 0 0 1.4rem;
+  }
+  .meta p { margin: 0.35rem 0; }
+  .verdict {
+    background: #f0f7f0;
+    border: 1px solid #b5d4b5;
+    border-left: 4px solid #1e7d32;
+    border-radius: 0 6px 6px 0;
+    padding: 0.8rem 1.1rem;
+    margin: 0.9rem 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>Data Lineage POC — Airflow → Spark → Iceberg Hop Review (HOP-01)</h1>
+
+<div class="meta">
+  <p><strong>Reviewer:</strong> <code>data-architecture</code> (standing in for <code>.opencode/agents/data-architecture.md</code>)</p>
+  <p><strong>Date:</strong> 2026-09-04</p>
+  <p><strong>Scope:</strong> the just-implemented <code>Airflow -&gt; Spark -&gt; Iceberg</code> hop wired to Marquez — DAGs (<code>dags/</code>), Spark apps (<code>spark-apps/</code>), <code>Dockerfile.airflow</code>, <code>Dockerfile.spark</code>, <code>spark-defaults.conf</code>, the compose wiring for <code>airflow-*</code> / <code>spark-*</code> (incl. the new <code>marquez</code> gate on <code>spark-master</code>), and the reconciliation of specs 02/04/05/06/07 against the artifacts. Tickets T-01 (Airflow + Spark OL transports → Marquez HTTP) and T-02 (Airflow Kafka dataset namespace → <code>kafka://kafka:9092</code>) are in scope as landed.</p>
+  <p><strong>Method:</strong> read-only audit. Every claim cites file + section/line. Nothing was run, built, or tested. Continuity: this review supersedes the orchestration/transform/sink findings of <code>reports/architecture-review.md</code> (prior verdict "fix before execution") for this hop; the CDC hop review (<code>reports/cdc-openlineage-review.md</code>, verdict "ready to test") is unchanged and its findings are not re-litigated.</p>
+</div>
+
+<hr>
+
+<h2>0. Verdict (summary)</h2>
+
+<div class="verdict">
+  <p><strong>Verdict: READY TO TEST</strong> — for the Airflow → Spark → Iceberg hop. The two prior blockers are resolved: (1) all three hops now emit OpenLineage over HTTP to Marquez (T-01: compose env <code>docker-compose.yml:167</code>, DAGs inline <code>dags/load_orders.py:32</code>, <code>spark-defaults.conf:41-42</code>); (2) <code>capture_snapshot</code> now has MinIO wiring (<code>docker-compose.yml:169-170</code> passes <code>MINIO_*</code> to airflow-*, <code>dags/config.py:31-33</code>, <code>s3.endpoint</code> in the pyiceberg catalog <code>dags/load_orders.py:85-99</code>). T-02 aligned the Airflow-declared Kafka dataset namespace to <code>kafka://kafka:9092</code> (<code>dags/config.py:16</code>), so the Airflow and Spark hops join in Marquez on the input side.</p>
+  <p>What remains is a short <strong>bring-up validation checklist</strong> (§5) plus documented drifts and risks that do not require a design change before the stack is exercised:</p>
+  <ul>
+    <li><strong>G1 (drift):</strong> the Iceberg snapshot id is captured by <code>capture_snapshot</code> but only XCom-pushed — it is never attached to a lineage record, so spec 04 §3's "attaches it as the output version marker" and spec 02's "a Spark run must carry both markers" rule are not met inside Marquez.</li>
+    <li><strong>R1 (risk, known item a):</strong> the openlineage-spark Iceberg handler emits the output dataset catalog-qualified (<code>nessie.poc</code> / <code>shop_orders</code>) while Airflow declares the logical <code>poc</code> / <code>shop_orders</code> — a Marquez join risk on the sink side. The lineage-designer is deciding the reconciliation in parallel; this review documents it with a recommendation (§4 R1).</li>
+    <li><strong>R2 (risk, known item d):</strong> the <code>marquez</code> / <code>marquez-web</code> / <code>nessie</code> healthchecks assume <code>bash</code> (<code>/dev/tcp</code>); <code>spark-master</code> now gates on <code>marquez</code> + <code>nessie</code> healthy, so a failed probe stalls the whole hop.</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2>1. What was reviewed</h2>
+
+<table>
+  <tr><th>File</th><th>Role in the hop</th></tr>
+  <tr><td><code>specs/02-lineage-model.md</code></td><td>Source of truth: job/run/dataset identities, precision rules, version markers, joining rules</td></tr>
+  <tr><td><code>specs/04-airflow-spec.md</code></td><td>DAG design, Spark orchestration, OL events, parent/child model, dataset declaration</td></tr>
+  <tr><td><code>specs/05-iceberg-spec.md</code></td><td>Table design, Nessie catalog, snapshot lifecycle, dataset identity, OL transport</td></tr>
+  <tr><td><code>specs/06-validation-metrics.md</code></td><td>Risks + OQs as resolved this session (OQ5/OQ6/OQ7/OQ11, T-01/T-02)</td></tr>
+  <tr><td><code>specs/07-deployment-docker.md</code></td><td>Compose inventory, env table, depends_on, runbook step 10</td></tr>
+  <tr><td><code>dags/config.py</code>, <code>dags/load_orders.py</code>, <code>dags/load_customers.py</code></td><td>SparkSubmitOperator, inlets/outlets, <code>capture_snapshot</code> pyiceberg read-back, OL transport</td></tr>
+  <tr><td><code>spark-apps/load_orders.py</code>, <code>spark-apps/load_customers.py</code></td><td><code>from_avro</code> UDF, declarative transform, MERGE upsert, table bootstrap</td></tr>
+  <tr><td><code>Dockerfile.airflow</code>, <code>Dockerfile.spark</code>, <code>spark-defaults.conf</code></td><td>Jars, listener config, Nessie/MinIO wiring</td></tr>
+  <tr><td><code>docker-compose.yml</code></td><td><code>airflow-*</code> / <code>spark-*</code> services, env, depends_on (incl. the <code>marquez</code> gate on <code>spark-master</code>)</td></tr>
+  <tr><td><code>.env.example</code>, <code>provisioning/*</code></td><td>Credential defaults, CDC-side provisioning (cross-check only)</td></tr>
+</table>
+
+<hr>
+
+<h2>2. Findings by audit dimension</h2>
+
+<h3>2.1 Lineage-model traceability (spec 02)</h3>
+
+<table>
+  <tr><th>#</th><th>Sev</th><th>Check</th><th>Finding</th><th>Evidence</th></tr>
+  <tr><td>L1</td><td>OK</td><td>Parent job identity</td><td><code>airflow:load_orders.spark_load_orders</code> — namespace <code>airflow</code> pinned in compose + DAGs; job name = <code>{dag_id}.{task_id}</code></td><td><code>dags/load_orders.py:32-33</code>; <code>docker-compose.yml:167-168</code>; <code>specs/02-lineage-model.md:50</code></td></tr>
+  <tr><td>L2</td><td>OK</td><td>Child job identity</td><td><code>spark:load_orders</code> — SparkSubmitOperator <code>name</code> and <code>SparkSession.appName</code> agree; OL namespace <code>spark</code></td><td><code>dags/load_orders.py:64</code>; <code>spark-apps/load_orders.py:99</code>; <code>spark-defaults.conf:43</code></td></tr>
+  <tr><td>L3</td><td>RISK</td><td>parentRun facet</td><td>Relies on the Airflow OL provider injecting <code>spark.openlineage.parentJobName</code> / <code>parentRunId</code> into the Spark conf; nothing sets them explicitly and the spec 04 §6 fallback ("read app id from operator") is not implemented</td><td><code>specs/04-airflow-spec.md:42-44</code>; <code>dags/load_orders.py:60-71</code></td></tr>
+  <tr><td>L4</td><td>OK</td><td>Input dataset identity</td><td><code>kafka://kafka:9092</code> / <code>mysql.shop.orders</code> — T-02 landed; matches the Debezium output and the Spark input</td><td><code>dags/config.py:16,19</code>; <code>dags/load_orders.py:68</code>; <code>specs/02-lineage-model.md:183-187</code></td></tr>
+  <tr><td>L5</td><td>RISK</td><td>Output dataset identity</td><td>Airflow outlet <code>poc</code> / <code>shop_orders</code> vs the openlineage-spark Iceberg handler emission <code>nessie.poc</code> / <code>shop_orders</code> — Marquez sink-side join risk</td><td><code>dags/load_orders.py:69</code>; <code>spark-defaults.conf:14</code>; <code>specs/02-lineage-model.md:29</code></td></tr>
+  <tr><td>L6</td><td>DRIFT</td><td>Snapshot-id version marker</td><td><code>capture_snapshot</code> reads <code>currentSnapshot().snapshotId()</code> and XCom-pushes it, but never attaches it to a lineage record — spec 04 §3 says "attaches it as the output version marker"; spec 02's "run must carry both markers" rule is unmet inside Marquez</td><td><code>dags/load_orders.py:100-109</code>; <code>specs/04-airflow-spec.md:45-47</code>; <code>specs/02-lineage-model.md:148-150</code></td></tr>
+  <tr><td>L7</td><td>OK</td><td>kafkaOffset facet</td><td>openlineage-spark listener emits the <code>kafkaOffset</code> facet for Kafka sources; listener + HTTP transport configured</td><td><code>spark-defaults.conf:40-42</code>; <code>specs/02-lineage-model.md:81,132</code></td></tr>
+  <tr><td>L8</td><td>INFO</td><td><code>capture_snapshot</code> reads the CURRENT snapshot</td><td>Not necessarily this run's snapshot; correct for a daily non-overlapping schedule, wrong under overlap</td><td><code>dags/load_orders.py:100-107</code></td></tr>
+</table>
+
+<h3>2.2 Precision honesty</h3>
+
+<table>
+  <tr><th>#</th><th>Sev</th><th>Finding</th><th>Evidence</th><th>Recommendation</th></tr>
+  <tr><td>P1</td><td>LOW</td><td>Step 4 comments claim "EXACT column lineage" / "complete columnLineage facet" without the OQ5 qualifier — exact only <strong>downstream of</strong> the <code>from_avro</code> UDF; the facet will leaf at the raw <code>value</code> column (inferred through the UDF)</td><td><code>spark-apps/load_orders.py:157-162</code>; <code>specs/02-lineage-model.md:116,123-124</code>; <code>specs/06-validation-metrics.md:87-91</code></td><td>Add the "downstream of the UDF" qualifier to the comments (the runbook's "exact for the declarative SELECT" is already honest)</td></tr>
+  <tr><td>P2</td><td>LOW</td><td><code>kafkaOffset</code> marker is degenerate: <code>startingOffsets=earliest</code> / <code>endingOffsets=latest</code> re-reads the full topic every run, so the facet is a constant <code>[0, end]</code> range that does not advance</td><td><code>spark-apps/load_orders.py:127-128</code>; <code>specs/02-lineage-model.md:132</code></td><td>Accept as a documented cumulative re-scan or move to checkpointed offsets</td></tr>
+  <tr><td>P3</td><td>LOW</td><td>Deletes filtered (<code>op='d'</code>, <code>after=null</code>) — Iceberg diverges from MySQL on deletes; documented as the OQ11 accepted scope cut</td><td><code>spark-apps/load_orders.py:178-179</code>; <code>specs/06-validation-metrics.md:118-123</code></td><td>Carry forward as an accepted scope cut</td></tr>
+  <tr><td>P4</td><td>OK</td><td><code>total_price</code> is a visible SQL expression (<code>quantity * unit_price</code>) — the exact-lineage demo — and documented in spec 05 §1</td><td><code>spark-apps/load_orders.py:173</code>; <code>specs/05-iceberg-spec.md:18-20</code></td><td>—</td></tr>
+</table>
+
+<h3>2.3 Cross-hop consistency</h3>
+
+<table>
+  <tr><th>#</th><th>Sev</th><th>Check</th><th>Finding</th><th>Evidence</th></tr>
+  <tr><td>C1</td><td>OK</td><td>Topic names</td><td><code>mysql.shop.orders</code> / <code>mysql.shop.customers</code> identical across specs 02/03/04/07, <code>config.py</code>, both apps, <code>register-connectors.sh</code></td><td><code>dags/config.py:19-20</code>; <code>spark-apps/load_orders.py:126</code>; <code>specs/02-lineage-model.md:20</code></td></tr>
+  <tr><td>C2</td><td>OK</td><td>Iceberg identities</td><td><code>poc.shop_orders</code> / <code>poc.shop_customers</code> identical across specs 02/04/05/07, <code>config.py</code>, DAG outlets, app DDL + MERGE</td><td><code>dags/config.py:36-37</code>; <code>dags/load_orders.py:69</code>; <code>spark-apps/load_orders.py:107</code></td></tr>
+  <tr><td>C3</td><td>OK</td><td>Marquez endpoint</td><td>All three hops post to <code>http://marquez:5000/api/v1/lineage</code></td><td><code>provisioning/openlineage.yml:6-9</code>; <code>docker-compose.yml:167</code>; <code>spark-defaults.conf:42</code>; <code>dags/load_orders.py:32</code></td></tr>
+  <tr><td>C4</td><td>OK</td><td>T-02 namespace alignment</td><td>Airflow inlets <code>kafka://kafka:9092</code> match the Debezium/Spark emission; OQ7 resolved</td><td><code>dags/config.py:16</code>; <code>specs/02-lineage-model.md:183-187</code>; <code>specs/06-validation-metrics.md:98-103</code></td></tr>
+  <tr><td>C5</td><td>RISK</td><td>Sink-side dataset join</td><td>Spark emits <code>nessie.poc</code> / <code>shop_orders</code>; Airflow declares <code>poc</code> / <code>shop_orders</code> — two output datasets in Marquez</td><td><code>spark-defaults.conf:14</code>; <code>dags/load_orders.py:69</code>; <code>specs/02-lineage-model.md:29</code></td></tr>
+  <tr><td>C6</td><td>OK</td><td>Service names vs deployment facet</td><td><code>spark://spark-master:7077</code>, <code>nessie:19120/api/v2</code>, <code>s3://poc-warehouse/</code>, <code>kafka:9092</code> all resolve to compose services</td><td><code>specs/02-lineage-model.md:94-103</code>; <code>docker-compose.yml:166,207,252-260</code></td></tr>
+</table>
+
+<h3>2.4 Deployment correctness</h3>
+
+<table>
+  <tr><th>#</th><th>Sev</th><th>Finding</th><th>Evidence</th><th>Recommendation</th></tr>
+  <tr><td>D1</td><td>MED</td><td>bash-assumption healthchecks now gate the whole hop: <code>marquez</code> (<code>:325</code>), <code>marquez-web</code> (<code>:343</code>), <code>nessie</code> (<code>:262</code>) use <code>bash -c 'exec 3&lt;&gt;/dev/tcp/...'</code>; <code>spark-master</code> gates on <code>marquez</code> + <code>nessie</code> healthy — if any image lacks bash, <code>spark-master</code> never starts</td><td><code>docker-compose.yml:213-219,262,325,343</code>; <code>specs/07-deployment-docker.md:245</code></td><td>Validate at bring-up; fall back to curl/python probes (known item d)</td></tr>
+  <tr><td>D2</td><td>LOW</td><td><code>AIRFLOW_USERNAME</code> / <code>AIRFLOW_PASSWORD</code> are not consumed by the official <code>apache/airflow</code> image (the initial admin comes from <code>_AIRFLOW_WWW_USER_USERNAME</code> / <code>_AIRFLOW_WWW_USER_PASSWORD</code>, defaults <code>airflow</code>/<code>airflow</code>) — the compose env and spec 07 §5 "UI login" wiring are ineffective</td><td><code>docker-compose.yml:164-165</code>; <code>specs/07-deployment-docker.md:203</code></td><td>Use the <code>_AIRFLOW_WWW_USER_*</code> vars or document the default login</td></tr>
+  <tr><td>D3</td><td>LOW</td><td>Spec 04 §Container deployment and spec 05 §6 say Spark services gate on <code>nessie</code> + <code>minio</code> only; compose now also gates <code>spark-master</code> on <code>marquez</code> (spec 07 §6 updated) — stale parentheticals</td><td><code>specs/04-airflow-spec.md:102-104</code>; <code>specs/05-iceberg-spec.md:72-76</code>; <code>docker-compose.yml:218-219</code></td><td>Update spec 04/05 wording</td></tr>
+  <tr><td>D4</td><td>LOW</td><td>Unpinned versions: <code>minio/mc:latest</code>, <code>pyiceberg</code>, <code>apache-airflow-providers-apache-spark</code>, <code>apache-airflow-providers-openlineage</code> — spec 06's "version drift" risk says pin everything</td><td><code>docker-compose.yml:353</code>; <code>Dockerfile.airflow:20-22</code></td><td>Pin these</td></tr>
+  <tr><td>D5</td><td>LOW</td><td><code>spark-defaults.conf</code> hardcodes MinIO creds that MUST match <code>.env</code>; a user-changed <code>MINIO_ROOT_PASSWORD</code> splits Spark (hardcoded) vs Airflow pyiceberg (env) credentials</td><td><code>spark-defaults.conf:22-23</code>; <code>specs/07-deployment-docker.md:215-218</code></td><td>Documented in spec 07; keep in sync</td></tr>
+  <tr><td>D6</td><td>LOW</td><td><code>mc</code> (bucket) is not a dependency of <code>spark-master</code>; a DAG triggered before <code>mc</code> runs fails at DDL (<code>CREATE TABLE</code> with warehouse <code>s3://poc-warehouse/</code>)</td><td><code>docker-compose.yml:213-219,352-365</code>; <code>specs/07-deployment-docker.md:264-268</code></td><td>Acknowledged in spec 07 §6; consider adding the gate</td></tr>
+  <tr><td>D7</td><td>LOW</td><td><code>FERNET_KEY</code> is empty in <code>.env.example</code> — Airflow generates a random key at startup; encrypted connection fields won't survive restarts</td><td><code>.env.example:17</code>; <code>specs/07-deployment-docker.md:282-283</code></td><td>Runbook says fill it; note</td></tr>
+  <tr><td>D8</td><td>LOW</td><td><code>from_avro</code> UDF name shadows Spark's built-in <code>from_avro</code> (the spark-avro jar is baked in)</td><td><code>spark-apps/load_orders.py:134</code>; <code>Dockerfile.spark:47-48</code></td><td>Rename to <code>confluent_from_avro</code></td></tr>
+  <tr><td>D9</td><td>LOW</td><td>Nessie commit-hash + writer-metadata facets (spec 05 §5) still unimplemented; spec 02 calls the hash optional enrichment</td><td><code>specs/05-iceberg-spec.md:51-59</code>; <code>specs/06-validation-metrics.md:56</code></td><td>Carry forward</td></tr>
+  <tr><td>D10</td><td>OK</td><td>MinIO wiring for <code>capture_snapshot</code> fixed: compose passes <code>MINIO_*</code> to airflow-*, <code>config.py</code> reads env, DAGs pass <code>s3.endpoint</code> to pyiceberg</td><td><code>docker-compose.yml:169-170</code>; <code>dags/config.py:31-33</code>; <code>dags/load_orders.py:85-99</code></td><td>Resolves prior review R2</td></tr>
+  <tr><td>D11</td><td>OK</td><td>Bind mounts: <code>./spark-apps</code> on webserver/scheduler/master/worker; deploy-mode cluster; app paths agree</td><td><code>docker-compose.yml:173,193,212,240</code>; <code>dags/config.py:42-43</code></td><td>—</td></tr>
+  <tr><td>D12</td><td>OK</td><td>Port remap collision-free: 13306/9092/8081/8083/8080/8082/8084/19120/9000/9002/5000/5001/3000</td><td><code>docker-compose.yml</code> ports; <code>specs/07-deployment-docker.md:151-179</code></td><td>—</td></tr>
+</table>
+
+<hr>
+
+<h2>3. Consistency drift vs spec 02 (documented, not fixed)</h2>
+
+<table>
+  <tr><th>#</th><th>Finding</th><th>Evidence</th><th>Recommendation</th></tr>
+  <tr><td>G1</td><td><strong>Snapshot id captured but never attached to a lineage record.</strong> Spec 04 §3 says <code>capture_snapshot</code> "attaches it as the output version marker"; the artifact only XCom-pushes + logs. Spec 02's rule "a Spark run must carry both the <code>kafkaOffset</code> facet (input) and the Iceberg snapshot id (output) for the lineage chain to close" is therefore unmet inside Marquez — the marker exists in XCom, not in the lineage store</td><td><code>dags/load_orders.py:107-109</code>; <code>specs/04-airflow-spec.md:45-47</code>; <code>specs/02-lineage-model.md:148-150</code></td><td>Attach the snapshot id to a lineage record (a facet on the <code>capture_snapshot</code> COMPLETE event, or a custom facet on the Spark run), or downgrade spec 04 §3 to "captures to XCom"</td></tr>
+  <tr><td>G2</td><td><strong>Stale depends_on wording.</strong> Spec 04 §Container deployment and spec 05 §6 say Spark services gate on <code>nessie</code> + <code>minio</code> only; compose gates <code>spark-master</code> on <code>nessie</code> + <code>minio</code> + <code>marquez</code> (spec 07 §6 was updated, the other two were not)</td><td><code>specs/04-airflow-spec.md:102-104</code>; <code>specs/05-iceberg-spec.md:72-76</code>; <code>docker-compose.yml:218-219</code>; <code>specs/07-deployment-docker.md:245</code></td><td>Update spec 04/05 wording</td></tr>
+  <tr><td>G3</td><td><strong>Sink-side identity reconciliation not landed.</strong> Spec 02 §Dataset:29 says "the OpenLineage-emitted Iceberg namespace/name from the Spark hop is reconciled when that hop lands" — the hop has landed and the emitted identity is <code>nessie.poc</code> / <code>shop_orders</code> vs the logical <code>poc</code> / <code>shop_orders</code></td><td><code>specs/02-lineage-model.md:29</code>; <code>spark-defaults.conf:14</code>; <code>dags/load_orders.py:69</code></td><td>Reconcile (lineage-designer in parallel); see R1</td></tr>
+  <tr><td>G4</td><td>Resolved since the prior review: OL sink exists (T-01), <code>capture_snapshot</code> MinIO wiring fixed, T-02 namespace aligned, OQ5/OQ6/OQ7/OQ11 resolved in spec 06</td><td><code>reports/architecture-review.md:17-18</code> vs current artifacts; <code>specs/06-validation-metrics.md:129-130</code></td><td>Note for the change log</td></tr>
+</table>
+
+<hr>
+
+<h2>4. Risks carried forward</h2>
+
+<table>
+  <tr><th>#</th><th>Risk</th><th>Impact</th><th>Mitigation / status</th></tr>
+  <tr><td>R1</td><td><strong>Sink-side dataset namespace mismatch</strong> (known item a): openlineage-spark Iceberg handler emits <code>nessie.poc</code> / <code>shop_orders</code>; Airflow declares <code>poc</code> / <code>shop_orders</code></td><td>Marquez shows two output datasets; the sink-side dataset join fails (the parent/child run join still holds via the parentRun facet)</td><td>lineage-designer is deciding the reconciliation in parallel. Recommendation: rename the Spark catalog to <code>poc</code> (emitted namespace becomes <code>poc</code>, matching the Airflow outlet), or declare the Airflow outlet as <code>nessie.poc</code> / <code>shop_orders</code>, or accept + document the catalog-qualified identity</td></tr>
+  <tr><td>R2</td><td><strong>bash-assumption healthchecks</strong> (known item d): <code>marquez</code>, <code>marquez-web</code>, <code>nessie</code> use <code>bash -c 'exec 3&lt;&gt;/dev/tcp/...'</code>; <code>spark-master</code> gates on <code>marquez</code> + <code>nessie</code> healthy</td><td>A failed probe stalls the whole Airflow → Spark hop (and <code>connect</code> for the CDC hop)</td><td>spec 06 risk row (<code>specs/06-validation-metrics.md:54,58</code>); validate at bring-up; fall back to TCP/curl probes</td></tr>
+  <tr><td>R3</td><td><strong>parentRun injection unverified</strong>: the Airflow OL provider must inject <code>spark.openlineage.parentJobName</code> / <code>parentRunId</code>; nothing sets them explicitly</td><td>Airflow → Spark join fails if the provider's extractor does not inject them</td><td>Verify at bring-up (Marquez shows the parent/child edge); the spec 04 §6 fallback is not implemented</td></tr>
+  <tr><td>R4</td><td><strong><code>kafkaOffset</code> marker degenerate</strong>: <code>earliest</code> → <code>latest</code> full re-read each run</td><td>Marker does not advance; re-scan grows with the 7-day topic</td><td>Accept as a documented cumulative re-scan or move to checkpointed offsets</td></tr>
+  <tr><td>R5</td><td><strong>Deletes filtered</strong> (OQ11 scope cut): <code>op='d'</code> / <code>after=null</code> dropped</td><td>Iceberg diverges from MySQL on deletes</td><td>Documented accepted scope cut (<code>specs/06-validation-metrics.md:118-123</code>)</td></tr>
+  <tr><td>R6</td><td><strong><code>from_avro</code> UDF shadows Spark builtin</strong></td><td>Runtime resolution ambiguity</td><td>Rename the UDF</td></tr>
+  <tr><td>R7</td><td><strong>Nessie commit-hash / writer-metadata facets unimplemented</strong></td><td>Spec 05 §5 promises metadata no artifact captures</td><td>Defer or drop from spec 05</td></tr>
+  <tr><td>R8</td><td><strong>Unpinned versions</strong> (<code>mc:latest</code>, pyiceberg, OL/spark providers)</td><td>Version drift breaks the stack</td><td>Pin per spec 06 risk row</td></tr>
+  <tr><td>R9</td><td><strong>Hardcoded MinIO creds in <code>spark-defaults.conf</code></strong></td><td>Split-brain credentials if <code>.env</code> changes</td><td>Keep in sync; documented in spec 07 §5</td></tr>
+  <tr><td>R10</td><td><strong><code>mc</code> not gating <code>spark-master</code></strong></td><td>DAG triggered before the bucket exists fails at DDL</td><td>Acknowledged in spec 07 §6</td></tr>
+  <tr><td>R11</td><td><strong><code>FERNET_KEY</code> empty default</strong></td><td>Encrypted connection fields break across restarts</td><td>Fill per the runbook</td></tr>
+  <tr><td>R12</td><td><strong><code>capture_snapshot</code> reads the CURRENT snapshot</strong></td><td>Wrong snapshot id under overlapping runs</td><td>Fine for the daily non-overlapping schedule</td></tr>
+</table>
+
+<hr>
+
+<h2>5. Bring-up validation checklist (observation, not fixes)</h2>
+
+<ol>
+  <li><code>marquez</code>, <code>marquez-web</code>, <code>nessie</code> report healthy (bash <code>/dev/tcp</code> probes pass) — else R2 applies and <code>spark-master</code> never starts.</li>
+  <li>Trigger <code>load_orders</code> (spec 07 §7 step 10); confirm <code>spark_load_orders</code> COMPLETE and <code>capture_snapshot</code> pushes a <code>snapshot_id</code> to XCom.</li>
+  <li>Marquez shows the parent/child edge: <code>airflow:load_orders.spark_load_orders</code> → <code>spark:load_orders</code> (R3 check).</li>
+  <li>Marquez shows the Spark input dataset <code>kafka://kafka:9092</code> / <code>mysql.shop.orders</code> joined to the Debezium output (T-02 check).</li>
+  <li>Record whether the Spark output dataset appears as <code>nessie.poc</code> / <code>shop_orders</code> or <code>poc</code> / <code>shop_orders</code> (R1 check; feeds the lineage-designer reconciliation).</li>
+  <li>Inspect the <code>columnLineage</code> facet on the Spark run: confirm the leaf columns map to the raw <code>value</code> column (inferred through the UDF) — validates OQ5's "inferred" claim.</li>
+  <li>Confirm the <code>kafkaOffset</code> facet appears on the Spark input dataset.</li>
+  <li>Confirm the <code>from_avro</code> UDF decodes (fastavro Decimal/Timestamp vs the declared <code>StructType</code>) with the schema registry reachable from executors.</li>
+  <li>Confirm the MERGE commits a new snapshot and the <code>total_price</code> cast (DECIMAL(21,2) → DECIMAL(12,2)) succeeds.</li>
+  <li>Confirm the Airflow UI login (default <code>airflow</code>/<code>airflow</code>, not <code>admin</code>/<code>admin</code> — D2).</li>
+</ol>
+
+<hr>
+
+<h2>6. ASCII architecture diagram (Airflow → Spark → Iceberg + Marquez)</h2>
+
+<pre>
+  ORCHESTRATION / TRANSFORM / SINK HOP (Airflow -&gt; Spark -&gt; Iceberg) + Marquez
+
+  airflow-db (postgres:16) ──metadata──▶ airflow-webserver (8080:8080)
+                                         airflow-scheduler (LocalExecutor)
+                                             │  SparkSubmitOperator (deploy-mode cluster)
+                                             │  conn spark://spark-master:7077
+                                             │  inlets  kafka://kafka:9092/mysql.shop.orders   [T-02]
+                                             │  outlets poc/shop_orders                        [R1]
+                                             ▼
+                                       spark-master (8082:8080, 7077 RPC)
+                                             │  depends_on: nessie + minio + marquez healthy   [D1]
+                                             │  register
+                                             ▼
+                                       spark-worker (8084:8081)
+                                             │  reads kafka:9092 (mysql.shop.orders)
+                                             │  from_avro UDF (schema-registry:8081)  [inferred]
+                                             │  declarative SELECT (exact) / total_price
+                                             │  MERGE INTO nessie.poc.shop_orders
+                                             ▼
+                                  ┌──────────────┐   ┌──────────────┐
+                                  │ nessie       │   │ minio        │
+                                  │ 19120:19120  │   │ 9000:9000 S3 │
+                                  │ (catalog)    │   │ 9002:9001 UI │
+                                  └──────────────┘   └──────┬───────┘
+                                                            │ bucket
+                                                            ▼
+                                                     mc (one-shot) poc-warehouse
+
+  Lineage events (HTTP -&gt; http://marquez:5000/api/v1/lineage):        [T-01]
+    airflow-webserver/scheduler ──OL START/RUNNING/COMPLETE/FAIL──▶ marquez (5000)
+    spark-master/worker (listener) ──OL START/COMPLETE/FAIL───────▶ marquez
+    capture_snapshot (pyiceberg read-back) ──snapshot_id──▶ XCom   [G1: not attached to OL]
+
+  Job identities:   airflow:load_orders.spark_load_orders (parent)
+                    spark:load_orders (child, run of record)
+  Datasets:         kafka://kafka:9092/mysql.shop.orders (input, joins Debezium output)
+                    poc/shop_orders (Airflow outlet)  vs  nessie.poc/shop_orders (Spark emission)  [R1]
+  Version markers:  kafkaOffset facet (Spark input) -&gt; Iceberg snapshot id (capture_snapshot XCom) [G1]
+</pre>
+
+<hr>
+
+<h2>7. Unresolved contradictions (documented, not silently fixed)</h2>
+
+<ol>
+  <li><strong>G1</strong> — spec 04 §3 "attaches it as the output version marker" vs the artifact (XCom + log only); spec 02's "run must carry both markers" rule unmet inside Marquez.</li>
+  <li><strong>G2</strong> — spec 04 §Container deployment / spec 05 §6 "Spark services gate on nessie + minio" vs compose <code>spark-master</code> gating on <code>nessie</code> + <code>minio</code> + <code>marquez</code>.</li>
+  <li><strong>G3</strong> — spec 02 §Dataset:29 "reconciled when that hop lands" vs the landed emission <code>nessie.poc</code> / <code>shop_orders</code> (R1).</li>
+  <li><strong>D2 / minor</strong> — <code>AIRFLOW_USERNAME</code> / <code>AIRFLOW_PASSWORD</code> (compose + spec 07 §5) are not consumed by the official Airflow image; the UI login will be the image default <code>airflow</code>/<code>airflow</code>.</li>
+</ol>
+
+<p>None of these block testing the Airflow → Spark → Iceberg hop; all are documentation reconciliations, bring-up validations, or parallel reconciliation items (R1).</p>
+
+</body>
+</html>
