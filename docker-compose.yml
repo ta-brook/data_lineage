@@ -159,6 +159,8 @@ services:
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
       AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type":"console"}' # Marquez sink optional (spec 04)
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pocadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD} # for pyiceberg capture_snapshot read-back
     volumes:
       - ./dags:/opt/airflow/dags
       - ./spark-apps:/opt/spark-apps # spark-submit client reads the app file
