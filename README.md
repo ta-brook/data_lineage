@@ -1,10 +1,11 @@
-# Data Lineage POC — MySQL → Debezium → Kafka → Airflow → Iceberg
+# Data Lineage POC — MySQL → Debezium → Kafka → Airflow → Spark → Iceberg
 
-Design-only POC for end-to-end **column-level data lineage** across a CDC + orchestration
-pipeline. **No code** — only agents, skills, and specs.
+Runnable docker-compose POC for end-to-end **column-level data lineage** across a CDC +
+orchestration pipeline. The stack is authored (compose file, Dockerfiles, sample DAGs,
+sample Spark apps, provisioning scripts) but **not yet executed or tested**.
 
 ```
-MySQL → Debezium → Kafka → Airflow → Iceberg
+MySQL → Debezium → Kafka → Airflow → Spark → Iceberg
 ```
 
 ## Structure
@@ -12,22 +13,32 @@ MySQL → Debezium → Kafka → Airflow → Iceberg
 ```
 data-lineage-poc/
 ├── README.md
+├── docker-compose.yml        # full stack: MySQL, Debezium, Kafka, Airflow, Spark, Nessie, MinIO
+├── Dockerfile.airflow        # Airflow image (spark-submit client, pyiceberg, openlineage)
+├── Dockerfile.spark          # Spark image (Iceberg/Nessie/Kafka/OpenLineage jars baked in)
+├── spark-defaults.conf       # Nessie catalog, S3A mirror, OpenLineage listener
+├── dags/                     # sample DAGs (load_orders, load_customers)
+├── spark-apps/               # sample PySpark apps (Kafka → Iceberg)
+├── provisioning/             # init-mysql.sql, cdc.cnf, register-connectors.sh, mc-init.sh
+├── .env.example              # env var template
+├── reports/                  # data-architecture review output (created by the review)
 ├── .opencode/
-│   ├── agents/          # 6 opencode agents (1 primary + 5 subagents)
-│   └── skills/          # 4 skills for lineage/CDC/Airflow/Iceberg design
-└── specs/               # POC design documents (00–06)
+│   ├── agents/               # 7 opencode agents (1 primary + 6 subagents)
+│   └── skills/               # 4 skills for lineage/CDC/Airflow/Iceberg design
+└── specs/                    # POC design documents (00–07)
 ```
 
 ## Agents
 
 | Agent | Mode | Role |
 |---|---|---|
-| `poc-orchestrator` | primary | Coordinates the POC, delegates to subagents, owns specs 00/01/06 |
+| `poc-orchestrator` | primary | Coordinates the POC, delegates to subagents, owns specs 00/01/06/07 |
 | `lineage-designer` | subagent | Lineage metadata model (spec 02) |
 | `debezium-expert` | subagent | CDC + Kafka hop (spec 03) |
 | `airflow-expert` | subagent | Airflow + OpenLineage hop (spec 04) |
 | `iceberg-expert` | subagent | Iceberg sink (spec 05) |
 | `poc-docs-writer` | subagent | Consolidates findings into specs |
+| `data-architecture` | subagent | Senior data architect; reviews all modules against the original specs; produces `reports/architecture-review.md` + diagram |
 
 ## Skills
 
@@ -49,6 +60,7 @@ data-lineage-poc/
 | `04-airflow-spec.md` | DAGs, OpenLineage events, transform precision |
 | `05-iceberg-spec.md` | Tables, catalog evaluation, snapshot lifecycle |
 | `06-validation-metrics.md` | Success criteria, risks, open questions |
+| `07-deployment-docker.md` | docker-compose topology, bring-up, validation |
 
 ## How to use
 
@@ -62,5 +74,6 @@ config to load.
 
 ## Status
 
-Draft. All specs are initial versions; see `specs/06-validation-metrics.md` for open
-questions and risks.
+Draft. The docker-compose stack and all sample code are **authored but not executed or
+tested**. Open questions and risks live in `specs/06-validation-metrics.md`; the
+data-architecture review report lives in `reports/`.
