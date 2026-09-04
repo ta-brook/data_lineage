@@ -74,12 +74,14 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
 
 | Compose service | Image | Host ports | Volumes | Key env vars |
 |---|---|---|---|---|
-| `airflow-postgres` | `postgres:16` | — | `airflow-db-data` | `POSTGRES_DB=airflow` |
-| `airflow-init` | custom (`Dockerfile.airflow`) | — | `./dags:/opt/airflow/dags` | `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` |
-| `airflow-scheduler` | custom | — | `./dags`, `./spark-apps:/opt/spark-apps` | executor, OpenLineage transport, MinIO/Nessie env |
-| `airflow-webserver` | custom | 8080 | `./dags` | same |
-| `spark-master` | custom (`Dockerfile.spark`) | 7077, 8082→8080 | `./spark-apps:/opt/spark-apps` | Nessie URI, MinIO endpoint, AWS creds |
-| `spark-worker` | custom | 8083→8081 | `./spark-apps:/opt/spark-apps` | same |
+| `airflow-db` | `postgres:16` | — | `airflow-db-data` | `POSTGRES_DB=airflow` |
+| `airflow-scheduler` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | — | `./dags`, `./spark-apps:/opt/spark-apps` | executor, OpenLineage transport, `AIRFLOW_CONN_SPARK_DEFAULT` |
+| `airflow-webserver` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | 8080 | `./dags`, `./spark-apps:/opt/spark-apps` | same |
+| `spark-master` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | 8082→8080 | `./spark-apps:/opt/spark-apps` | MINIO_ROOT_USER / MINIO_ROOT_PASSWORD (compose env); Nessie URI + MinIO endpoint baked into spark-defaults.conf |
+| `spark-worker` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | 8084→8081 | `./spark-apps:/opt/spark-apps` | same |
+
+Note: there is no `airflow-init` service in compose — the official Airflow image
+entrypoint runs `airflow db migrate` on first webserver/scheduler start.
 
 ### How it connects to neighbors
 
@@ -87,13 +89,16 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
   the Spark app, not by Airflow.
 - Downstream: `nessie:19120` (catalog), `minio:9000` (warehouse) — written by Spark;
   read back by Airflow's `capture_snapshot` task.
-- `depends_on`: Airflow services wait for `airflow-postgres` healthy and
-  `airflow-init` completed; Spark services wait for `nessie` + `minio` healthy.
+- `depends_on`: Airflow services wait for `airflow-db` healthy (no separate init
+  container; the image entrypoint migrates the DB); Spark services wait for `nessie`
+  + `minio` healthy.
 
 ### Provisioning (init step)
 
-- `airflow-init` (one-shot): `airflow db migrate`, create admin user, set Variables
-  (topology refs from `dags/config.py`).
+- DB migration runs via the official Airflow image entrypoint (`airflow db migrate`)
+  on first webserver/scheduler start — no separate init container. The `spark_default`
+  connection is created from the `AIRFLOW_CONN_SPARK_DEFAULT` env var
+  (`spark://spark-master:7077`).
 - DAGs are bind-mounted (`./dags:/opt/airflow/dags`) — no image rebuild per DAG edit.
 - Spark image: jars baked in via `Dockerfile.spark` (Iceberg runtime, Nessie
   extensions, spark-sql-kafka, spark-avro, openlineage-spark, hadoop-aws).

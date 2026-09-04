@@ -68,18 +68,20 @@ lever that produces these names — treat it as immutable once data flows.
 
 | Compose service | Image | Host ports | Volumes | Key env vars |
 |---|---|---|---|---|
-| `mysql` | `mysql:8.0` | 13306→3306 | `mysql-data`, `./provisioning/init-mysql.sql:/docker-entrypoint-initdb.d/`, `./provisioning/cdc.cnf:/etc/mysql/conf.d/cdc.cnf` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE=shop` |
-| `kafka` | `confluentinc/cp-kafka:7.9.x` | 9092 | `kafka-data` | KRaft listeners, `CLUSTER_ID`, retention 7d |
-| `schema-registry` | `confluentinc/cp-schema-registry:7.9.x` | 8081 | — | `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:29092` |
-| `connect` | `debezium/connect:3.6.x` | 8083 | — | `BOOTSTRAP_SERVERS=kafka:29092`, Avro converters, registry URL |
-| `provision` | `curlimages/curl` (one-shot) | — | — | registers connectors via Connect REST |
+| `mysql` | `mysql:8.0` | 13306→3306 | `mysql-data`, `./provisioning/init-mysql.sql:/docker-entrypoint-initdb.d/01-init.sql:ro`, `./provisioning/cdc.cnf:/etc/mysql/conf.d/cdc.cnf:ro` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE=shop` |
+| `kafka` | `confluentinc/cp-kafka:7.9.0` | 9092 | `kafka-data` | KRaft listeners, `CLUSTER_ID`, retention 7d |
+| `schema-registry` | `confluentinc/cp-schema-registry:7.9.0` | 8081 | — | `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092` |
+| `connect` | `debezium/connect:3.6.0` | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, Avro converters, registry URL |
+| `provision` | `curlimages/curl:8.10.1` (one-shot) | — | — | registers connectors via Connect REST |
 
 ### How it connects to neighbors
 
 - Upstream: `mysql:3306` (binlog source).
-- Downstream: `kafka:29092` (internal listener) for Connect/Schema Registry; Airflow
-  and Spark consume `kafka:9092` (advertised internal listener) and
+- Downstream: `kafka:9092` (PLAINTEXT listener, advertised as `kafka:9092`) for
+  Connect/Schema Registry; Airflow and Spark consume the same `kafka:9092` and
   `http://schema-registry:8081` for Avro deserialization.
+- Note: `29092` is the PLAINTEXT_HOST listener (advertised as `localhost:29092`) for
+  host access only; in-stack services do not use it.
 - `depends_on`: `connect` waits for `kafka` + `schema-registry` healthy; `provision`
   waits for `connect` healthy.
 

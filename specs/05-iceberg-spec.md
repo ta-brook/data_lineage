@@ -61,9 +61,9 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
 
 | Compose service | Image | Host ports | Volumes | Key env vars |
 |---|---|---|---|---|
-| `nessie` | `ghcr.io/projectnessie/nessie:0.108.x` | 19120 | `nessie-data:/data` | `NESSIE_VERSION_STORE_TYPE=ROCKSDB`, `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH=/data/nessie` |
+| `nessie` | `ghcr.io/projectnessie/nessie:0.108.4` | 19120 | `nessie-data:/data` | `NESSIE_VERSION_STORE_TYPE=ROCKSDB`, `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH=/data/nessie` |
 | `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | 9000 (S3), 9002→9001 (console) | `minio-data` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_REGION=us-east-1` |
-| `mc-init` | `minio/mc:latest` (one-shot) | — | — | creates bucket `poc-warehouse` |
+| `mc` | `minio/mc:latest` (one-shot) | — | — | creates bucket `poc-warehouse` |
 
 ### How it connects to neighbors
 
@@ -71,17 +71,18 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
   Airflow's `capture_snapshot` task reads the catalog for snapshot ids.
 - Warehouse URI: `s3://poc-warehouse/`. Table locations:
   `s3://poc-warehouse/poc/shop_orders`, `s3://poc-warehouse/poc/shop_customers`.
-- `depends_on`: `mc-init` waits for `minio` healthy; Spark waits for `nessie` + `minio`
+- `depends_on`: `mc` waits for `minio` healthy; Spark waits for `nessie` + `minio`
   healthy.
 
 ### Provisioning (init step)
 
-- `mc-init` creates the bucket idempotently:
+- `mc` creates the bucket idempotently:
   `mc alias set local http://minio:9000 <user> <pass> && mc mb --ignore-existing local/poc-warehouse`.
 - **Table bootstrap moves into the Spark job** (Spark SQL DDL at the top of the app):
-  `CREATE NAMESPACE IF NOT EXISTS poc; CREATE TABLE IF NOT EXISTS poc.shop_orders (...)`.
-  Rationale: the engine that writes the data owns the schema; the schema facet comes
-  from table metadata read-back, not a separate Airflow-side DDL.
+  `CREATE NAMESPACE IF NOT EXISTS nessie.poc; CREATE TABLE IF NOT EXISTS nessie.poc.shop_orders (...)`.
+  The `nessie.` prefix is the Spark catalog qualifier; the lineage identity remains
+  `poc.shop_orders`. Rationale: the engine that writes the data owns the schema; the
+  schema facet comes from table metadata read-back, not a separate Airflow-side DDL.
 
 ### Validation in the running stack
 
