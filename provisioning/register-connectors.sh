@@ -11,6 +11,14 @@
 # was removed in 3.x). topic.prefix=mysql + database.include.list=shop +
 # table.include.list=<table> => mysql.{db}.{table}. Do not change these names;
 # they are the join key between the MySQL and Kafka datasets in the lineage model.
+#
+# OpenLineage (native Debezium 3.6 integration, spec 03 sec 6): each connector
+# emits run events (START / RUNNING / COMPLETE / FAIL) to Marquez. The job
+# identity is {namespace}:{job_name} = debezium.{connector}:mysql.0, where the
+# namespace comes from openlineage.integration.job.namespace (disambiguates the
+# two connectors, which share topic.prefix=mysql) and the job name is
+# topic.prefix + task id. Input datasets: mysql://mysql:3306 / shop.orders;
+# output datasets: kafka://kafka:9092 / mysql.shop.orders (OpenLineage SMT).
 
 set -u
 
@@ -38,6 +46,10 @@ echo "Connect is ready"
 # lineage dataset identities from spec 02.
 # Avro converters + schema registry => registry subjects {topic}-key/-value
 # carry the event schema that feeds the lineage schema facet (spec 03, sec 3).
+# OpenLineage block: enables the native integration, points at the client
+# config (/kafka/openlineage.yml, HTTP transport to Marquez), sets the job
+# namespace/description/tags/owners, and attaches the OpenLineage SMT so the
+# output Kafka topics are emitted as lineage datasets.
 
 ORDERS_PAYLOAD='{
   "name": "shop-orders",
@@ -58,7 +70,16 @@ ORDERS_PAYLOAD='{
     "value.converter": "io.confluent.connect.avro.AvroConverter",
     "key.converter.schema.registry.url": "http://schema-registry:8081",
     "value.converter.schema.registry.url": "http://schema-registry:8081",
-    "topic.prefix": "mysql"
+    "topic.prefix": "mysql",
+    "openlineage.integration.enabled": "true",
+    "openlineage.integration.config.file.path": "/kafka/openlineage.yml",
+    "openlineage.integration.job.namespace": "debezium.shop-orders",
+    "openlineage.integration.job.description": "CDC connector: MySQL shop.orders -> Kafka mysql.shop.orders",
+    "openlineage.integration.job.tags": "environment=dev,team=data-platform,hop=cdc",
+    "openlineage.integration.job.owners": "Data Platform=owner",
+    "openlineage.integration.dataset.kafka.bootstrap.servers": "kafka:9092",
+    "transforms": "openlineage",
+    "transforms.openlineage.type": "io.debezium.transforms.openlineage.OpenLineage"
   }
 }'
 
@@ -81,7 +102,16 @@ CUSTOMERS_PAYLOAD='{
     "value.converter": "io.confluent.connect.avro.AvroConverter",
     "key.converter.schema.registry.url": "http://schema-registry:8081",
     "value.converter.schema.registry.url": "http://schema-registry:8081",
-    "topic.prefix": "mysql"
+    "topic.prefix": "mysql",
+    "openlineage.integration.enabled": "true",
+    "openlineage.integration.config.file.path": "/kafka/openlineage.yml",
+    "openlineage.integration.job.namespace": "debezium.shop-customers",
+    "openlineage.integration.job.description": "CDC connector: MySQL shop.customers -> Kafka mysql.shop.customers",
+    "openlineage.integration.job.tags": "environment=dev,team=data-platform,hop=cdc",
+    "openlineage.integration.job.owners": "Data Platform=owner",
+    "openlineage.integration.dataset.kafka.bootstrap.servers": "kafka:9092",
+    "transforms": "openlineage",
+    "transforms.openlineage.type": "io.debezium.transforms.openlineage.OpenLineage"
   }
 }'
 

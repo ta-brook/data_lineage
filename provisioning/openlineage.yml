@@ -1,0 +1,9 @@
+# openlineage.yml - OpenLineage client config for the Debezium Connect worker.
+# Referenced by the connectors via openlineage.integration.config.file.path.
+# HTTP transport: emits OpenLineage run/dataset events to Marquez, the POC's
+# OpenLineage backend (spec 03, sec 6). Marquez listens on 5000 in the
+# compose network; /api/v1/lineage is the OpenLineage event endpoint.
+transport:
+  type: http
+  url: http://marquez:5000
+  endpoint: /api/v1/lineage

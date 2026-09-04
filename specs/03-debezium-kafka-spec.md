@@ -62,6 +62,48 @@ lever that produces these names — treat it as immutable once data flows.
 - Run/version marker: binlog position (source) and Kafka offset (broker).
 - Precision: **exact** column passthrough — no renames, no transforms.
 
+### 6. OpenLineage integration (Marquez)
+
+Debezium 3.6 ships a **native OpenLineage integration** (verified against the
+3.6 docs). The POC emits this hop's lineage to **Marquez** (the OpenLineage
+backend) so MySQL -> Kafka lineage is visible end-to-end.
+
+- **Run events:** the connector emits `START`, periodic `RUNNING`, `COMPLETE`,
+  and `FAIL` events covering the snapshot and streaming lifecycle.
+- **Job mapping:** each connector is an OpenLineage job with identity
+  `{namespace}:{job_name}`:
+  - `job_name` = `topic.prefix` + task id -> `mysql.0` for both connectors.
+  - `namespace` = `openlineage.integration.job.namespace` ->
+    `debezium.shop-orders` / `debezium.shop-customers`. The namespace
+    disambiguates the two connectors (they share `topic.prefix=mysql`, so the
+    bare job names would collide).
+  - Full identities: `debezium.shop-orders:mysql.0` and
+    `debezium.shop-customers:mysql.0`.
+- **Dataset mapping (source connector):**
+  - Input datasets: one per monitored table -> namespace `mysql://mysql:3306`,
+    name `shop.orders` / `shop.customers` (schema = source table columns).
+  - Output datasets: one per produced topic, captured by the **OpenLineage SMT**
+    -> namespace `kafka://kafka:9092`, name `mysql.shop.orders` /
+    `mysql.shop.customers` (schema = CDC event structure).
+- **Required dependency:** `debezium-openlineage-core-3.6.2.Final-libs.tar.gz`
+  (Maven Central) extracted into the Connect plugin dir. The custom image
+  `Dockerfile.connect` (built from `debezium/connect:3.6.2.Final`) bakes in the
+  libs under `/kafka/connect/debezium-openlineage-core/` and the client config
+  at `/kafka/openlineage.yml`.
+- **OpenLineage client:** `provisioning/openlineage.yml` configures HTTP
+  transport to Marquez (`http://marquez:5000/api/v1/lineage`).
+- **Connector config properties** (both connectors, see
+  `provisioning/register-connectors.sh`):
+  `openlineage.integration.enabled=true`,
+  `openlineage.integration.config.file.path=/kafka/openlineage.yml`,
+  `openlineage.integration.job.namespace=debezium.shop-{orders|customers}`,
+  `openlineage.integration.job.description=...`,
+  `openlineage.integration.job.tags=environment=dev,team=data-platform,hop=cdc`,
+  `openlineage.integration.job.owners=Data Platform=owner`,
+  `openlineage.integration.dataset.kafka.bootstrap.servers=kafka:9092`,
+  `transforms=openlineage`,
+  `transforms.openlineage.type=io.debezium.transforms.openlineage.OpenLineage`.
+
 ## Container deployment (docker-compose)
 
 ### Services in this hop
@@ -71,7 +113,7 @@ lever that produces these names — treat it as immutable once data flows.
 | `mysql` | `mysql:8.0` | 13306→3306 | `mysql-data`, `./provisioning/init-mysql.sql:/docker-entrypoint-initdb.d/01-init.sql:ro`, `./provisioning/cdc.cnf:/etc/mysql/conf.d/cdc.cnf:ro` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE=shop` |
 | `kafka` | `confluentinc/cp-kafka:7.9.0` | 9092 | `kafka-data` | KRaft listeners, `CLUSTER_ID`, retention 7d |
 | `schema-registry` | `confluentinc/cp-schema-registry:7.9.0` | 8081 | — | `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092` |
-| `connect` | `debezium/connect:3.6.0` | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, Avro converters, registry URL |
+| `connect` | `debezium/connect:3.6.2.Final` (custom: `Dockerfile.connect` adds OL libs + `openlineage.yml`) | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, Avro converters, registry URL |
 | `provision` | `curlimages/curl:8.10.1` (one-shot) | — | — | registers connectors via Connect REST |
 
 ### How it connects to neighbors
@@ -84,6 +126,8 @@ lever that produces these names — treat it as immutable once data flows.
   host access only; in-stack services do not use it.
 - `depends_on`: `connect` waits for `kafka` + `schema-registry` healthy; `provision`
   waits for `connect` healthy.
+- Lineage events: `connect` → `marquez:5000` (HTTP, OpenLineage API) via the
+  OpenLineage client config (`provisioning/openlineage.yml`).
 
 ### Provisioning (init step)
 
@@ -93,7 +137,8 @@ lever that produces these names — treat it as immutable once data flows.
   `gtid_mode=ON`, `binlog_expire_logs_seconds=604800`.
 - `provision` container: `POST /connectors` to `http://connect:8083/connectors` with
   the `shop-orders` and `shop-customers` connector JSON (Avro converters,
-  `topic.prefix=mysql`, `snapshot.mode=initial`, `tombstones.on.delete=true`).
+  `topic.prefix=mysql`, `snapshot.mode=initial`, `tombstones.on.delete=true`,
+  OpenLineage integration enabled - see section 6).
 
 ### Validation in the running stack
 
@@ -106,6 +151,10 @@ lever that produces these names — treat it as immutable once data flows.
 - Connector = lineage **job**; snapshot/stream cycle = lineage **run**.
 - Topic = output **dataset**; schema facet from the Avro schema (`after` record).
 - No column transforms → exact column lineage to the topic.
+- OpenLineage job identity `debezium.{connector}:mysql.0` (namespace + job name)
+  is the physical emission of the lineage-model job `debezium:{connector}`
+  (spec 02): the OL namespace carries the connector name, the job name carries
+  `topic.prefix` + task id. Marquez events are this hop's lineage records.
 
 ## Alternatives considered
 

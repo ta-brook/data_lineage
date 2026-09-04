@@ -1,0 +1,21 @@
+# Dockerfile.connect
+# Custom Debezium Connect image for the POC: adds the native OpenLineage
+# integration (spec 03, sec 6) on top of the pinned Debezium 3.6.2.Final image.
+
+FROM debezium/connect:3.6.2.Final
+
+# --- OpenLineage core libs -------------------------------------------------
+# The native OpenLineage integration needs the bundled JARs (openlineage-java
+# client + the OpenLineage SMT). Extract into a subdir of the image's
+# plugin.path (/kafka/connect) so Connect's plugin scanner picks them up;
+# --strip-components=1 drops the archive's top-level directory.
+ARG OL_CORE_URL=https://repo1.maven.org/maven2/io/debezium/debezium-openlineage-core/3.6.2.Final/debezium-openlineage-core-3.6.2.Final-libs.tar.gz
+RUN curl -fsSL -o /tmp/debezium-openlineage-core-libs.tar.gz "$OL_CORE_URL" \
+    && mkdir -p /kafka/connect/debezium-openlineage-core \
+    && tar -xzf /tmp/debezium-openlineage-core-libs.tar.gz -C /kafka/connect/debezium-openlineage-core --strip-components=1 \
+    && rm -f /tmp/debezium-openlineage-core-libs.tar.gz
+
+# --- OpenLineage client config ---------------------------------------------
+# HTTP transport to Marquez (the POC's OpenLineage backend). Referenced by the
+# connectors via openlineage.integration.config.file.path=/kafka/openlineage.yml.
+COPY provisioning/openlineage.yml /kafka/openlineage.yml
