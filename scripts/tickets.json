@@ -1,0 +1,81 @@
+{
+    "repo":  "ta-brook/data_lineage",
+    "assignee":  "ta-brook",
+    "tickets":  [
+                    {
+                        "id":  "EXE-01",
+                        "title":  "Bring up the docker-compose stack and run the spec 07 validation runbook",
+                        "body":  "Bring up the docker-compose stack (16 services) and execute the validation runbook in specs/07-deployment-docker.md sec7.\n\n- cp .env.example .env (fill FERNET_KEY, MINIO_ROOT_PASSWORD)\n- docker compose up -d --build\n- docker compose ps: all healthy; mc/provision exited 0\n- connectors RUNNING; topics mysql.shop.orders / mysql.shop.customers exist\n\nOwner: poc-orchestrator. Ref: specs/07 sec7, STATE.md sec3.",
+                        "labels":  [
+                                       "agent:poc-orchestrator",
+                                       "phase:execution",
+                                       "priority:high"
+                                   ],
+                        "status":  "open",
+                        "github_number":  1
+                    },
+                    {
+                        "id":  "CDC-01",
+                        "title":  "Validate CDC hop lineage end-to-end (MySQL -\u003e Debezium -\u003e Kafka -\u003e Marquez)",
+                        "body":  "Validate the CDC hop lineage end-to-end:\n\n- Insert a row into MySQL (:13306) and read it back from topic mysql.shop.orders (console consumer)\n- Marquez UI http://localhost:3000: lineage mysql://mysql:3306/shop.orders -\u003e debezium.shop-orders:mysql.0 -\u003e kafka://kafka:9092/mysql.shop.orders; run RUNNING; schema facet\n- Validate bring-up risks from reports/cdc-openlineage-review.md: Marquez/Nessie healthcheck tooling, OL SMT schema facet (envelope vs after), Connect image \u003c-\u003e OL core version lockstep (3.6.2.Final)\n\nOwner: debezium-expert. Ref: specs/03, specs/07 sec7, reports/cdc-openlineage-review.md.",
+                        "labels":  [
+                                       "agent:debezium-expert",
+                                       "phase:cdc",
+                                       "priority:high"
+                                   ],
+                        "status":  "open",
+                        "github_number":  2
+                    },
+                    {
+                        "id":  "T-01",
+                        "title":  "Switch Airflow + Spark OpenLineage transports from console to Marquez",
+                        "body":  "Switch the Airflow + Spark OpenLineage transports from console to Marquez when those hops are implemented:\n\n- AIRFLOW__OPENLINEAGE__TRANSPORT -\u003e {\"type\":\"http\",\"url\":\"http://marquez:5000\",\"endpoint\":\"api/v1/lineage\"} (compose + dags inline conf)\n- spark.openlineage.transport.type=http, url=http://marquez:5000 (spark-defaults.conf)\n\nOwners: airflow-expert, iceberg-expert. Ref: specs/06 ticket T-01, specs/04/05.",
+                        "labels":  [
+                                       "agent:airflow-expert",
+                                       "agent:iceberg-expert",
+                                       "phase:orchestration",
+                                       "priority:medium"
+                                   ],
+                        "status":  "open",
+                        "github_number":  3
+                    },
+                    {
+                        "id":  "T-02",
+                        "title":  "Align Airflow Kafka dataset namespace to kafka://kafka:9092",
+                        "body":  "Align Airflow-declared Kafka dataset namespace to kafka://kafka:9092 (currently bare \u0027kafka\u0027) so Airflow and Spark hops join in Marquez. Update dags/ inlets + spec 04.\n\nOwner: airflow-expert. Ref: specs/06 ticket T-02, specs/02 joining rules, OQ7.",
+                        "labels":  [
+                                       "agent:airflow-expert",
+                                       "phase:orchestration",
+                                       "priority:medium"
+                                   ],
+                        "status":  "open",
+                        "github_number":  4
+                    },
+                    {
+                        "id":  "HOP-01",
+                        "title":  "Implement Airflow -\u003e Spark -\u003e Iceberg hop end-to-end",
+                        "body":  "Implement the Airflow -\u003e Spark -\u003e Iceberg hop end-to-end:\n\n- Run DAGs load_orders / load_customers (SparkSubmitOperator, cluster mode)\n- Spark apps read Kafka (from_avro), transform, MERGE into nessie.poc.shop_orders / shop_customers\n- capture_snapshot reads back the Iceberg snapshot id\n- OpenLineage events from Airflow + Spark into Marquez (depends on T-01)\n\nOwners: airflow-expert, iceberg-expert. Ref: specs/04, specs/05, dags/, spark-apps/.",
+                        "labels":  [
+                                       "agent:airflow-expert",
+                                       "agent:iceberg-expert",
+                                       "phase:orchestration",
+                                       "priority:high"
+                                   ],
+                        "status":  "open",
+                        "github_number":  5
+                    },
+                    {
+                        "id":  "OQ-01",
+                        "title":  "Resolve open questions OQ1/OQ3-OQ9/OQ11 in spec 06",
+                        "body":  "Resolve the open questions in specs/06-validation-metrics.md: OQ1, OQ3-OQ9, OQ11 (OQ2/OQ10 already resolved for the CDC hop). Update the specs and close the questions.\n\nOwners: lineage-designer, poc-orchestrator. Ref: specs/06.",
+                        "labels":  [
+                                       "agent:lineage-designer",
+                                       "agent:poc-orchestrator",
+                                       "phase:design",
+                                       "priority:low"
+                                   ],
+                        "status":  "open",
+                        "github_number":  6
+                    }
+                ]
+}

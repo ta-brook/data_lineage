@@ -156,3 +156,14 @@ Git history: one commit per task per agent (see `git log --oneline`).
 3. If resuming design work: resolve open questions in spec 06, then update specs/artifacts
    with per-agent commits (one commit per task per agent), update this file, and push
    (session-workflow skill).
+
+## 9. Tickets (GitHub board)
+
+Every task is tracked as a GitHub issue in `ta-brook/data_lineage`, assigned to
+`ta-brook` (human driver) and labelled with the responsible agent (`agent:*`), phase
+(`phase:*`), and priority (`priority:*`).
+
+- Manifest: `scripts/tickets.json` (source of truth) · human view: `TICKETS.md`
+- Sync: `powershell -File scripts/sync-tickets.ps1 --sync` (requires `gh` auth)
+- Owner: pm-agent (`.opencode/agents/pm-agent.md`) — syncs at session start/close
+- Current board: EXE-01 (#1), CDC-01 (#2), T-01 (#3), T-02 (#4), HOP-01 (#5), OQ-01 (#6)
