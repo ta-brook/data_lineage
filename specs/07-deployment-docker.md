@@ -154,8 +154,8 @@ deploy-mode cluster.
   remapped to host 8084. (The STATE.md draft had 8083→8081 for the worker, which
   collides with Connect; the compose file implements 8084→8081.)
 - **8083** — Connect keeps host 8083.
-- **9000** — MinIO S3 keeps host 9000. Nessie is pulled from GHCR (no UI on 9000), so
-  no collision with the Nessie Docker Hub image.
+- **9000** — MinIO S3 keeps host 9000. The GHCR Nessie image ships no web UI (the
+  Docker Hub image's UI on 9000 was the collision risk), so no collision.
 - **9001/9002** — MinIO console is internal 9001, remapped to host 9002.
 
 ## 5. Env vars per service

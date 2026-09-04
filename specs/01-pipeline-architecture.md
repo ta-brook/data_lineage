@@ -9,7 +9,7 @@
                  source                     broker                 orchestration                transform                     sink
 ┌─────────────┐        ┌─────────────┐        ┌──────────┐        ┌──────────────┐        ┌──────────────┐        ┌──────────────┐
 │   MySQL     │ ─CDC─▶ │  Debezium   │ ─topic─▶ │  Kafka   │ ─submit─▶│   Airflow    │ ─submit─▶│    Spark     │ ─write─▶│   Iceberg    │
-│ db.schema   │        │ connector   │          │  broker  │          │  DAG / tasks │          │  app / SQL   │         │ catalog.table│
+│ db.table   │        │ connector   │          │  broker  │          │  DAG / tasks │          │  app / SQL   │         │ catalog.table│
 └─────────────┘        └─────────────┘          └──────────┘        └──────────────┘        └──────────────┘        └──────────────┘
     dataset                 job                  dataset                job (parent)              job (child)              dataset
 ```
@@ -43,7 +43,7 @@
 
 1. MySQL emits binlog events for configured tables.
 2. Debezium snapshots/streams these events, keyed by MySQL PK, and publishes them to a
-   topic whose name maps back to `db.schema.table`.
+   topic whose name maps back to `db.table` (MySQL database = schema).
 3. Airflow DAGs submit Spark apps (SparkSubmitOperator, deploy-mode cluster).
 4. Spark reads the Kafka topic (spark-sql-kafka + from_avro), runs a declarative SQL
    transform, and writes to an Iceberg table via the Nessie catalog.
@@ -54,8 +54,9 @@
 
 Full conventions live in spec 02. Summary:
 
-- MySQL dataset: `db.schema.table`
-- Kafka topic: `mysql.db.schema.table` (CDC stream)
+- MySQL dataset: `db.table` (MySQL database = schema; no separate schema level)
+- Kafka topic: `mysql.db.table` (CDC stream; MySQL database = schema, so Debezium
+  topics are prefix.database.table)
 - Iceberg dataset: `catalog.namespace.table` (e.g. `poc.shop_orders`)
 - Lineage jobs: `debezium:{connector}`, `airflow:{dag_id}.{task_id}` (parent),
   `spark:{app_name}` (child)

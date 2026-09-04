@@ -13,7 +13,7 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
 ### 1. DAG design
 
 - One DAG per logical dataset (mirrors topic-per-table): submits a Spark app that
-  consumes `mysql.{db}.{schema}.{table}` and produces `poc.{dataset}` in Iceberg.
+  consumes `mysql.{db}.{table}` and produces `poc.{dataset}` in Iceberg.
 - DAG identity: `{dag_id}.{task_id}` (the lineage **parent** job).
 - Example DAG: `load_orders` → task `spark_load_orders` (SparkSubmitOperator) →
   task `capture_snapshot` (pyiceberg read-back).

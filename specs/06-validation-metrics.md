@@ -43,7 +43,14 @@ designed metadata:
 | **Version drift across images/jars** (Airflow, Spark, Iceberg, Nessie) | Stack breaks | Pin every image and jar tag in spec 07 |
 | **Spark ↔ Confluent Avro deserialization** | Wrong/none data | from_avro UDF; registry reachable from Spark |
 | **runId correlation Airflow ↔ Spark** | Parent/child join fails | parentJobName/parentRunId injection; fallback = read app id from operator |
-| **Port collisions** (8080/8081/8083/9000/9001) | Compose fails | Host-port remap table in spec 07 |
+| **Port collisions** (8080/8081/8082/8083/8084/9000/9001/9002/13306/19120) | Compose fails | Host-port remap table in spec 07 (resolved set) |
+| **No queryable lineage sink** (both OL transports are `console`) | Success criteria 1–5 cannot be exercised | Add a Marquez/HTTP OpenLineage sink before the execution phase (OQ10) |
+| **`capture_snapshot` MinIO wiring** | Snapshot version marker missing | s3.endpoint + creds passed to pyiceberg (fixed in dags/); validate at bring-up |
+| **Deletes silently dropped** (`op='d'` filtered in Spark apps) | Iceberg diverges from MySQL | Documented scope cut; tombstone/delete handling deferred (OQ11) |
+| **from_avro precision claim** (OQ5) | Exactness overclaimed through an opaque UDF | Resolve OQ5; mark inferred until proven by the OL listener |
+| **Nessie healthcheck assumes bash** (`/dev/tcp`) | Healthcheck fails if the image lacks bash | Validate at bring-up; fall back to a TCP-only check if needed |
+| **Binlog position not emitted as lineage** | Version-marker chain starts at Kafka offset | Documented limitation; Debezium `source` info is in the envelope for later use |
+| **Nessie commit-hash / writer-metadata facets unimplemented** | Spec 05 promises metadata no artifact captures | Defer or drop from spec 05 until a sink exists |
 
 ## Open questions
 
@@ -61,8 +68,16 @@ designed metadata:
 8. Do **backfills** need lineage of their own, or is the scheduled-run lineage enough?
 9. Is **streaming** in scope? (Batch-only for the POC; streaming would add
    checkpoint-as-dataset and batch-id markers.)
+10. Should the POC ship a **Marquez/HTTP OpenLineage sink** so lineage events are
+    queryable, or is console transport sufficient for the design validation?
+11. How should **deletes/tombstones** flow through the POC? (Currently `op='d'` is
+    filtered in the Spark apps, so Iceberg diverges from MySQL on deletes.)
 
 ## Change log
 
 - 2026-09-04: initial draft.
 - 2026-09-04: updated for runnable docker-compose deployment and Spark hop.
+- 2026-09-04: data-architecture review completed (reports/architecture-review.md,
+  verdict "fix before execution"); risks added for OL sink absence, capture_snapshot
+  wiring, delete handling, from_avro precision, Nessie healthcheck, binlog marker,
+  and unimplemented Nessie facets; port-collision row updated to the final remap set.
