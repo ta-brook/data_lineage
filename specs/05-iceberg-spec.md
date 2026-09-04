@@ -43,10 +43,22 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
 
 ### 4. Dataset identity in lineage
 
-- Namespace: `poc`; name: the logical dataset, e.g. `shop_orders`.
-- Full identity: `poc.shop_orders`.
+Two identities, one table — mirrors spec 02's logical → physical mapping for Debezium
+jobs (OQ12 RESOLVED, spec 06):
+
+- **Logical canonical identity** (model reference, spec 02): namespace `poc`, name
+  `shop_orders` → `poc.shop_orders`. This is the environment-agnostic name the lineage
+  model uses for joins and column mapping.
+- **Physical OpenLineage identity** (what Marquez receives): namespace `nessie.poc`,
+  name `shop_orders` → `nessie.poc` / `shop_orders`. openlineage-spark 1.52.0's
+  Iceberg handler prefixes the dataset namespace with the Spark catalog name
+  (`nessie`), so the emitted identity is catalog-qualified (OQ12 RESOLVED, spec 06;
+  ticket T-03). The logical identity maps to it, exactly as logical
+  `debezium:{connector}` maps to the emitted `debezium.{connector}:mysql.0` (spec 02).
 - A lineage run references `(catalog=nessie, namespace, table, snapshot_id)` plus the
-  Nessie commit hash as enrichment.
+  Nessie commit hash as enrichment — the catalog qualifier is `nessie` in both
+  identities; only the OpenLineage namespace differs (`poc` logical vs `nessie.poc`
+  physical).
 
 ### 5. Exposed lineage metadata
 
@@ -57,6 +69,24 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
   `engine-version`, `spark.app.id`, `added-records`. This tells *which Spark run*
   created the snapshot (parent: the Airflow run).
 - Schema facet — table schema at snapshot time.
+
+### 6. OpenLineage transport
+
+- The Spark app emits run events via the **openlineage-spark listener** with HTTP
+  transport to Marquez (`http://marquez:5000/api/v1/lineage`), namespace `spark`
+  (job identity `spark:{app_name}`, spec 02) — the same backend the Debezium CDC
+  events (spec 03) and the Airflow parent-run events (spec 04) use.
+- The transport switch does **not** change the version-marker design: the Iceberg
+  snapshot id is still captured by Airflow's `capture_snapshot` pyiceberg read-back
+  (spec 04 §3) after the Spark run COMPLETEs. The openlineage-spark listener does
+  not emit the snapshot id in the POC (OQ6 RESOLVED in spec 06), so the read-back
+  task stays the version-marker source.
+- Reachability: `spark-master` / `spark-worker` must reach `marquez:5000` on the
+  compose network (`lineage-poc`, spec 07) at app run time — the listener posts on
+  START/COMPLETE/FAIL of the Spark run, so Marquez must be healthy before a DAG
+  triggers a Spark app. Spec 07 §6 gates `spark-master` on `nessie` + `minio` +
+  `marquez` healthy (Marquez because the Spark OL listener posts at app run time,
+  ticket T-01); `spark-worker` gates on `spark-master` healthy.
 
 ## Container deployment (docker-compose)
 
@@ -74,8 +104,10 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
   Airflow's `capture_snapshot` task reads the catalog for snapshot ids.
 - Warehouse URI: `s3://poc-warehouse/`. Table locations:
   `s3://poc-warehouse/poc/shop_orders`, `s3://poc-warehouse/poc/shop_customers`.
-- `depends_on`: `mc` waits for `minio` healthy; Spark waits for `nessie` + `minio`
-  healthy.
+- `depends_on`: `mc` waits for `minio` healthy; `spark-master` waits for `nessie` +
+  `minio` + `marquez` healthy (Marquez because the Spark OL listener posts
+  START/COMPLETE/FAIL at app run time, ticket T-01); `spark-worker` waits for
+  `spark-master` healthy.
 
 ### Provisioning (init step)
 
@@ -83,9 +115,12 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
   `mc alias set local http://minio:9000 <user> <pass> && mc mb --ignore-existing local/poc-warehouse`.
 - **Table bootstrap moves into the Spark job** (Spark SQL DDL at the top of the app):
   `CREATE NAMESPACE IF NOT EXISTS nessie.poc; CREATE TABLE IF NOT EXISTS nessie.poc.shop_orders (...)`.
-  The `nessie.` prefix is the Spark catalog qualifier; the lineage identity remains
-  `poc.shop_orders`. Rationale: the engine that writes the data owns the schema; the
-  schema facet comes from table metadata read-back, not a separate Airflow-side DDL.
+  The `nessie.` prefix is the Spark catalog qualifier; the logical lineage identity is
+  `poc.shop_orders`, and the physical OpenLineage identity the Spark handler emits is
+  `nessie.poc` / `shop_orders` (OQ12/T-03) — the DDL's catalog-qualified name is
+  exactly the physical identity. Rationale: the engine that writes the data owns the
+  schema; the schema facet comes from table metadata read-back, not a separate
+  Airflow-side DDL.
 
 ### Validation in the running stack
 
@@ -98,6 +133,8 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
 - Iceberg table = lineage **dataset**; snapshot = **version marker**.
 - Snapshot id closes the lineage chain from Kafka offset → Iceberg snapshot.
 - Writer metadata answers *which Spark run created the snapshot* (parent: Airflow run).
+- Physical OpenLineage identity `nessie.poc` / `shop_orders` is what Marquez receives;
+  logical `poc` / `shop_orders` maps to it (OQ12 RESOLVED, spec 06; ticket T-03).
 
 ## Alternatives considered
 
@@ -109,6 +146,9 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
 
 ## Cross-dependencies
 
-- Output identity `poc.{table}` must match spec 04's declared output dataset.
+- Output identity: the Airflow-declared outlet must use the **physical** identity
+  `nessie.poc` / `shop_orders` (ticket T-03, spec 04/06) so it matches the
+  Spark-emitted output and the parent/child join closes in Marquez; the logical
+  `poc.{table}` remains the model reference and maps to it (OQ12 RESOLVED).
 - Snapshot retention must be reconciled with Kafka topic retention (spec 03).
 - Spark image jars must match the Nessie server version (0.108.x) — pinned in spec 07.
