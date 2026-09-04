@@ -105,3 +105,8 @@ designed metadata:
   Debezium native OL emission (spec 03), lineage model reconciled (spec 02), OQ2/OQ10
   resolved for the CDC hop, follow-up tickets T-01/T-02 added, reporting standard
   (HTML) added to spec 00.
+- 2026-09-04: CDC/OpenLineage review completed (reports/cdc-openlineage-review.md,
+  verdict "ready to test"); review drift G1 (Kafka schema facet = envelope, tied to
+  OQ4) and G2 (deployment-facet `openlineage` endpoint) resolved in spec 02; remaining
+  items are bring-up validations (Marquez healthcheck tooling, SMT × Avro schema,
+  version lockstep).

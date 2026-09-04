@@ -29,6 +29,12 @@ the logical identity (`poc` / `shop_orders`); the OpenLineage-emitted Iceberg
 namespace/name from the Spark hop is reconciled when that hop lands — see OQ7 in
 spec 06.
 
+**Schema facet nuance (review G1):** for the Kafka dataset, Debezium's OpenLineage SMT
+emits the schema facet as the full CDC **envelope** (before/after/source/op/…), not
+just the `after` record. The lineage *table* schema (the MySQL columns) remains the
+`after` record / registry subject (`{topic}-value`). Both represent the same columns;
+OQ4 in spec 06 tracks which the lineage model treats as canonical.
+
 ### Job
 
 An action that consumes/produces datasets.
@@ -87,6 +93,7 @@ deployment facet {
     spark_master:   "spark://spark-master:7077"
     nessie_uri:     "http://nessie:19120/api/v2"
     warehouse:      "s3://poc-warehouse/"   // MinIO
+    openlineage:    "http://marquez:5000/api/v1/lineage"   // OpenLineage backend (Marquez)
   }
 }
 ```
