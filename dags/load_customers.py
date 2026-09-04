@@ -4,9 +4,11 @@ and writes poc.shop_customers to Iceberg, then capture the output snapshot id.
 Lineage (spec 02/04):
 - parent job:  airflow:load_customers.spark_load_customers
 - child job:   spark:load_customers (Spark app; run of record for the data chain)
-- input:       kafka:mysql.shop.customers
-- output:      poc:shop_customers (version marker = Iceberg snapshot id, read back
-               from the warehouse via MinIO s3.endpoint)
+- input:       kafka://kafka:9092:mysql.shop.customers
+- output:      nessie.poc:shop_customers (physical OpenLineage identity - what Marquez
+               receives; logical canonical poc.shop_customers per spec 02 OQ12).
+               Version marker = Iceberg snapshot id, read back from the warehouse
+               via MinIO s3.endpoint)
 """
 
 import logging
@@ -23,17 +25,17 @@ import config
 log = logging.getLogger(__name__)
 
 # --- OpenLineage transport (inline) -------------------------------------------
-# The provider's default transport is console (events are logged, not shipped) -
-# sufficient for the POC. A Marquez sink can be added later by replacing the
-# transport JSON, e.g. {"type": "http", "url": "http://marquez:5000/api/v1/lineage"}.
-# The namespace is pinned to "airflow" so the parent job identity is exactly
+# Transport is HTTP to Marquez (http://marquez:5000/api/v1/lineage) - the same
+# endpoint the Debezium CDC hop posts to (spec 03/07), so Airflow events land in
+# Marquez alongside the CDC events (ticket T-01). The namespace is pinned to
+# "airflow" so the parent job identity is exactly
 # airflow:load_customers.spark_load_customers (spec 02/04).
 try:
-    conf.set("openlineage", "transport", '{"type": "console"}')
+    conf.set("openlineage", "transport", '{"type": "http", "url": "http://marquez:5000/api/v1/lineage"}')
     conf.set("openlineage", "namespace", "airflow")
 except Exception:
-    # Config may be read-only in some contexts; the provider defaults
-    # (console transport, namespace "airflow") are equivalent.
+    # Config may be read-only in some contexts; the compose env
+    # (AIRFLOW__OPENLINEAGE__TRANSPORT / AIRFLOW__OPENLINEAGE__NAMESPACE) is equivalent.
     pass
 
 default_args = {
@@ -66,8 +68,8 @@ spark_load_customers = SparkSubmitOperator(
     deploy_mode="cluster",
     master=config.SPARK_MASTER,
     application_args=[],  # the app reads its config from env/args; keep it simple
-    inlets=[Dataset("kafka", config.TOPIC_CUSTOMERS)],
-    outlets=[Dataset("poc", "shop_customers")],
+    inlets=[Dataset(config.KAFKA_NAMESPACE, config.TOPIC_CUSTOMERS)],
+    outlets=[Dataset(config.OUTPUT_NAMESPACE, "shop_customers")],
     dag=dag,
 )
 
