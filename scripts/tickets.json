@@ -36,7 +36,7 @@
                                        "phase:orchestration",
                                        "priority:medium"
                                    ],
-                        "status":  "open",
+                        "status":  "closed",
                         "github_number":  3
                     },
                     {
@@ -48,7 +48,7 @@
                                        "phase:orchestration",
                                        "priority:medium"
                                    ],
-                        "status":  "open",
+                        "status":  "closed",
                         "github_number":  4
                     },
                     {
@@ -61,7 +61,7 @@
                                        "phase:orchestration",
                                        "priority:high"
                                    ],
-                        "status":  "open",
+                        "status":  "closed",
                         "github_number":  5
                     },
                     {
@@ -74,8 +74,33 @@
                                        "phase:design",
                                        "priority:low"
                                    ],
-                        "status":  "open",
+                        "status":  "closed",
                         "github_number":  6
+                    },
+                    {
+                        "id":  "T-03",
+                        "title":  "Align Airflow-declared Iceberg outlets to physical identity nessie.poc/shop_orders (OQ12)",
+                        "body":  "Align the Airflow-declared Iceberg outlet datasets to the physical Iceberg identity nessie.poc/shop_orders (and shop_customers) so Airflow and Spark hops join in Marquez (OQ12). Update dags/ outlets + specs 04/05.\n\nOwners: airflow-expert, iceberg-expert. Ref: specs/06 OQ12, specs/04/05.",
+                        "labels":  [
+                                       "agent:airflow-expert",
+                                       "agent:iceberg-expert",
+                                       "phase:orchestration",
+                                       "priority:medium"
+                                   ],
+                        "status":  "closed",
+                        "github_number":  7
+                    },
+                    {
+                        "id":  "T-04",
+                        "title":  "Downgrade spec 04 §3 snapshot-id wording to \u0027records in Airflow run metadata\u0027 (OQ13)",
+                        "body":  "Downgrade the spec 04 §3 wording that \u0027attaches it as the output version marker\u0027 to \u0027records in Airflow run metadata\u0027 — the snapshot id is recorded in Airflow run metadata, not attached as an output version marker (OQ13). Update spec 04.\n\nOwner: airflow-expert. Ref: specs/06 OQ13, specs/04.",
+                        "labels":  [
+                                       "agent:airflow-expert",
+                                       "phase:orchestration",
+                                       "priority:low"
+                                   ],
+                        "status":  "closed",
+                        "github_number":  8
                     }
                 ]
 }
