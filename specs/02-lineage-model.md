@@ -15,23 +15,40 @@ hop must emit so lineage can be joined end-to-end.
 A named set of data with a schema. Each logical table exists as multiple datasets
 across hops:
 
-| Logical table | MySQL dataset | Kafka dataset | Iceberg dataset |
+| Logical table | MySQL dataset (namespace / name) | Kafka dataset (namespace / name) | Iceberg dataset (namespace / name) |
 |---|---|---|---|
-| `orders` | `shop.orders` | `mysql.shop.orders` | `poc.shop_orders` |
-| `customers` | `shop.customers` | `mysql.shop.customers` | `poc.shop_customers` |
+| `orders` | `mysql://mysql:3306` / `shop.orders` | `kafka://kafka:9092` / `mysql.shop.orders` | `poc` / `shop_orders` |
+| `customers` | `mysql://mysql:3306` / `shop.customers` | `kafka://kafka:9092` / `mysql.shop.customers` | `poc` / `shop_customers` |
 
 Dataset identity fields: `namespace`, `name`, `schema` (column list), `version marker`.
+
+The MySQL and Kafka namespace/name pairs above are the **physical OpenLineage
+identities** emitted by the Debezium source connector (`mysql://mysql:3306` and
+`kafka://kafka:9092` match the deployment-facet endpoints). The Iceberg pair shown is
+the logical identity (`poc` / `shop_orders`); the OpenLineage-emitted Iceberg
+namespace/name from the Spark hop is reconciled when that hop lands — see OQ7 in
+spec 06.
 
 ### Job
 
 An action that consumes/produces datasets.
 
-- Debezium connector: `debezium:{connector_name}`
+- Debezium connector: logical `debezium:{connector_name}` → OpenLineage-emitted
+  `debezium.{connector_name}:{topic.prefix}.{task_id}` (e.g. `debezium.shop-orders:mysql.0`)
 - Airflow DAG/task (orchestrator parent): `airflow:{dag_id}.{task_id}`
 - Spark application (transform child): `spark:{app_name}`
 
 Jobs can be **parent/child**: the Airflow task is the parent of the Spark app it
 submits. The parent carries orchestration context; the child moves the data.
+
+**Debezium job identity (why the mapping):** Debezium 3.6 emits OpenLineage events
+natively. The emitted job name is derived from `{topic.prefix}.{task_id}` (e.g.
+`mysql.0`) and is **not configurable**; the connector name is carried in the job
+namespace (`openlineage.integration.job.namespace`). Both POC connectors share
+`topic.prefix=mysql`, so the namespace is what disambiguates them:
+`debezium.shop-orders:mysql.0` and `debezium.shop-customers:mysql.0`. The logical
+`debezium:{connector}` name is the model's canonical reference; the OpenLineage
+identity is what Marquez will actually display.
 
 ### Run
 
@@ -121,8 +138,13 @@ marker breaks the path.
 
 ## Lineage events / timeline
 
-1. **Source ingest**: Debezium run completes → emit dataset(s) produced with schema +
-   offset.
+1. **Source ingest**: Debezium emits OpenLineage run events natively
+   (START / RUNNING / COMPLETE / FAIL) to the OpenLineage backend, carrying the input
+   dataset (MySQL table) and output dataset (Kafka topic) with schema facets. The
+   connector run is **long-running (streaming)**: START at connector start, RUNNING
+   periodically while streaming, COMPLETE/FAIL at shutdown or error. The Kafka offset
+   version marker is captured from the broker; the binlog position stays in the event
+   envelope, not in the OL event (see spec 06 risk table).
 2. **Orchestration**: Airflow task run starts → declare parent job + child Spark app;
    completes → emit output table snapshot id + column lineage (captured by the pyiceberg
    read-back task).
@@ -134,11 +156,17 @@ marker breaks the path.
 ## Joining rules
 
 - Join MySQL → Kafka by the topic-naming convention (topic embeds `db.table`; MySQL
-  database = schema).
+  database = schema), resolved via the physical namespaces: MySQL input
+  `mysql://mysql:3306` / `shop.{table}` → Kafka output `kafka://kafka:9092` /
+  `mysql.shop.{table}`.
 - Join Kafka → Spark by the input dataset declared on the Spark run (the topic).
 - Join Spark → Iceberg by the output dataset identity (namespace/name), versioned by
   snapshot id.
 - Join Airflow → Spark by the `parentRun` facet (parent run id).
+- **OpenLineage namespace format:** dataset namespaces follow the OpenLineage
+  convention `kafka://bootstrap:port` (here `kafka://kafka:9092`). Airflow-declared
+  Kafka datasets must eventually match this format so the Airflow and Spark hops join
+  in Marquez — see OQ7 in spec 06.
 - A lineage path is only complete when a single run chain links a MySQL dataset to an
   Iceberg dataset with no missing markers, within one `(instance_id, stack_epoch)`.
 
