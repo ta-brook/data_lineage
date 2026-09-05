@@ -1,6 +1,6 @@
 # POC State File — Resume Point
 
-**Last saved:** 2026-09-05 (session: CLN-01 landed — HOP-01 review drifts D2/D4/D6/D8/P1/P2/D9 + sync-tickets.ps1 fixes; verdict "ready to test" unchanged)
+**Last saved:** 2026-09-05 (session: CLN-02 landed — final runbook reconciliation: G3 envelope wording + load_customers coverage; all authoring complete, execution pending)
 **Working dir:** `C:\Users\user\Documents\github\data_lineage`
 
 This file records exactly what is done and what remains. On resume, read this file first,
@@ -29,7 +29,7 @@ executed or tested** yet.
 | DAGs + Spark apps | Authored (`load_orders`, `load_customers`; confluent_from_avro UDF, MERGE upsert, `capture_snapshot`) |
 | Lineage wiring | **All three hops emit OpenLineage to Marquez** (Debezium CDC native OL, Airflow parent runs, Spark child runs) |
 | Reviews | 3 completed: architecture (fix applied), CDC hop (**ready to test**), Airflow→Spark→Iceberg hop (**ready to test**) |
-| Ticket board | 7 closed, 2 open (EXE-01, CDC-01) — synced to GitHub |
+| Ticket board | 8 closed, 2 open (EXE-01, CDC-01) — synced to GitHub |
 
 ### Key design decisions locked in
 
@@ -91,7 +91,8 @@ Three review cycles completed:
 | **T-04: spec 04 §3 snapshot-id wording (OQ13)** | `specs/04-airflow-spec.md` | Done |
 | **OQ-01 + OQ12 + OQ13 resolved** | `specs/02-lineage-model.md`, `specs/06-validation-metrics.md` | Done |
 | **CLN-01: HOP-01 review drifts D2/D4/D6/D8/P1/P2/D9 + sync-tickets.ps1 fixes** | `scripts/sync-tickets.ps1`, `docker-compose.yml`, `Dockerfile.airflow`, `Dockerfile.spark`, `spark-apps/*.py`, specs 01/02/03/05/06/07, `STATE.md`, `TICKETS.md` | Done |
-| Ticket board synced (7 closed, 2 open) | `scripts/tickets.json`, `TICKETS.md`, GitHub issues #1–#9 | Done |
+| **CLN-02: final runbook reconciliation — G3 envelope wording + load_customers coverage** | `specs/07-deployment-docker.md` | Done |
+| Ticket board synced (8 closed, 2 open) | `scripts/tickets.json`, `TICKETS.md`, GitHub issues #1–#10 | Done |
 
 Git history: one commit per task per agent (see `git log --oneline`).
 
@@ -240,4 +241,4 @@ Every task is tracked as a GitHub issue in `ta-brook/data_lineage`, assigned to
 - Owner: pm-agent (`.opencode/agents/pm-agent.md`) — syncs at session start/close
 - Current board: EXE-01 (#1, open), CDC-01 (#2, open), T-01 (#3, closed), T-02 (#4,
   closed), HOP-01 (#5, closed), OQ-01 (#6, closed), T-03 (#7, closed), T-04 (#8, closed),
-  CLN-01 (#9, closed)
+  CLN-01 (#9, closed), CLN-02 (#10, closed)
