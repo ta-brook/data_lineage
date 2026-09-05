@@ -53,7 +53,7 @@ designed metadata:
 | **confluent_from_avro precision claim** (OQ5) | Exactness overclaimed through an opaque UDF | RESOLVED (OQ5): inferred until proven by the OL listener |
 | **Nessie healthcheck assumes bash** (`/dev/tcp`) | Healthcheck fails if the image lacks bash | Validate at bring-up; fall back to a TCP-only check if needed |
 | **Binlog position not emitted as lineage** | Version-marker chain starts at Kafka offset | Documented limitation; Debezium `source` info is in the envelope for later use |
-| **Nessie commit-hash / writer-metadata facets unimplemented** | Spec 05 promises metadata no artifact captures | Defer or drop from spec 05 until a sink exists |
+| **Nessie commit-hash / writer-metadata facets unimplemented** | Spec 05 promises metadata no artifact captures | DEFERRED (review D9): spec 05 §5 annotated as deferred — not captured by any POC artifact; revisit when a sink exists |
 | **Debezium OpenLineage integration is new (3.6)** — SMT × Avro-converter schema representation | Marquez schema facet may differ from the registry subject | Validate at bring-up; the registry subject stays the lineage schema facet (spec 02) |
 | **Marquez image healthchecks assume bash** (`/dev/tcp`) | Healthcheck fails if the image lacks bash | Validate at bring-up; fall back to a TCP-only check |
 | **Connect image ↔ OL core version lockstep** (`3.6.2.Final`) | OL SMT missing if versions drift | Pin both together in spec 07; upgrade as a pair |

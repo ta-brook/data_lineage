@@ -65,9 +65,14 @@ jobs (OQ12 RESOLVED, spec 06):
 - **Table version / snapshot id** — captured on COMPLETE of the writing Spark run via
   pyiceberg read-back (`table.currentSnapshot().snapshotId()`).
 - **Nessie commit hash** — catalog-level marker from `GET /api/v2/trees/main`.
+  **DEFERRED (review D9):** not captured by any POC artifact — the openlineage-spark
+  listener does not emit it and no task reads it back. Kept here as the design intent;
+  the spec 06 risk row tracks it as deferred until a sink exists.
 - **Writer metadata** — snapshot summary: `operation`, `engine-name=spark`,
   `engine-version`, `spark.app.id`, `added-records`. This tells *which Spark run*
-  created the snapshot (parent: the Airflow run).
+  created the snapshot (parent: the Airflow run). **DEFERRED (review D9):** not
+  captured in the POC — the snapshot summary is available in Iceberg metadata but no
+  POC task reads it into a lineage record.
 - Schema facet — table schema at snapshot time.
 
 ### 6. OpenLineage transport

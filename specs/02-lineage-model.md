@@ -148,7 +148,8 @@ markers of its runs.
   Spark checkpoint.
 - Iceberg snapshot id: `table.currentSnapshot().snapshotId()` via the Nessie catalog
   after commit (spec 05). The Nessie commit hash is an optional enrichment of the
-  version facet, not a replacement marker.
+  version facet, not a replacement marker — **deferred in the POC** (review D9: no
+  artifact captures it; see spec 05 §5 / spec 06 risk row).
 
 **Rule:** the lineage chain closes when the Spark run carries the `kafkaOffset` facet
 (input) in Marquez **and** the Iceberg snapshot id (output) is recorded in Airflow run
