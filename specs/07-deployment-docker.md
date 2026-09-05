@@ -242,7 +242,7 @@ provision (one-shot) ──depends_on connect + kafka (healthy)── registers 
 airflow-db ──(no deps)── healthcheck: pg_isready
 airflow-webserver ──depends_on airflow-db (healthy)── healthcheck: curl /health
 airflow-scheduler ──depends_on airflow-db (healthy)── (no healthcheck)
-spark-master ──depends_on nessie + minio + marquez (healthy)── healthcheck: GET localhost:8080
+spark-master ──depends_on nessie + minio + marquez (healthy) + mc (completed)── healthcheck: GET localhost:8080
 spark-worker ──depends_on spark-master (healthy)── healthcheck: GET localhost:8081
 nessie ──(no deps)── healthcheck: /dev/tcp localhost:19120
 minio ──(no deps)── healthcheck: curl /minio/health/live
@@ -263,9 +263,10 @@ Notes:
 
 - `spark-master` gates on `nessie` + `minio` + `marquez` healthy (specs 04/05; Marquez
   because the Spark OL listener posts START/COMPLETE/FAIL at app run time, ticket
-  T-01); `spark-worker` gates on `spark-master` healthy. A DAG triggered before the
-  catalog/warehouse are up will still fail at Spark-run time if the tables/bucket are
-  not yet provisioned.
+  T-01) **and on `mc` completed** (D6: the bucket `poc-warehouse` must exist before
+  Spark DDL `CREATE TABLE ... s3://poc-warehouse/` runs); `spark-worker` gates on
+  `spark-master` healthy. A DAG triggered before the catalog/warehouse are up will
+  still fail at Spark-run time if the tables are not yet provisioned.
 - Airflow services do not depend on `kafka` / `connect`; topics are only needed at
   Spark-run time.
 - `mysql` init SQL runs only on first boot (empty `mysql-data` volume).

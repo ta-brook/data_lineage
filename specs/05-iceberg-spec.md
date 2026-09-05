@@ -106,7 +106,8 @@ jobs (OQ12 RESOLVED, spec 06):
   `s3://poc-warehouse/poc/shop_orders`, `s3://poc-warehouse/poc/shop_customers`.
 - `depends_on`: `mc` waits for `minio` healthy; `spark-master` waits for `nessie` +
   `minio` + `marquez` healthy (Marquez because the Spark OL listener posts
-  START/COMPLETE/FAIL at app run time, ticket T-01); `spark-worker` waits for
+  START/COMPLETE/FAIL at app run time, ticket T-01) **and for `mc` completed** (D6:
+  the bucket `poc-warehouse` must exist before Spark DDL); `spark-worker` waits for
   `spark-master` healthy.
 
 ### Provisioning (init step)

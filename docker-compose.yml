@@ -220,6 +220,8 @@ services:
         condition: service_healthy
       marquez:
         condition: service_healthy # Spark OL listener posts to Marquez at app run time (T-01)
+      mc:
+        condition: service_completed_successfully # bucket poc-warehouse must exist before Spark DDL (D6)
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/')\""]
       interval: 10s
