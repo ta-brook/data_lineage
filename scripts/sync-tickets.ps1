@@ -10,14 +10,18 @@
     - closes/reopens issues per the manifest status
   It writes the GitHub issue number back into tickets.json.
 
+  PS 5.1 note: use -Mode <mode> (not --mode). With `powershell -File`, the
+  --sync/--list/--close forms arrive as positional strings and are normalized
+  here, but -Mode is the documented, reliable form.
+
 .PARAMETER Mode
   sync (default) | list | close | reopen
 .PARAMETER Id
   Ticket id for close/reopen, e.g. EXE-01
 .EXAMPLE
-  powershell -File scripts/sync-tickets.ps1 --sync
-  powershell -File scripts/sync-tickets.ps1 --list
-  powershell -File scripts/sync-tickets.ps1 --close EXE-01
+  powershell -File scripts/sync-tickets.ps1 -Mode sync
+  powershell -File scripts/sync-tickets.ps1 -Mode list
+  powershell -File scripts/sync-tickets.ps1 -Mode close -Id EXE-01
 #>
 param(
   [string]$Mode = "sync",
@@ -36,14 +40,30 @@ $manifest = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $repo = $manifest.repo
 $assignee = $manifest.assignee
 
+# Normalize -Mode: accept -Mode sync, --sync, -sync. PS 5.1 -File invocation
+# passes --sync/--list/--close as positional strings (they do not bind to the
+# named -Mode parameter), so strip leading dashes before the switch.
+$Mode = $Mode.TrimStart('-')
+
 function Save-Manifest {
   $json = $manifest | ConvertTo-Json -Depth 6
   # UTF-8 without BOM (PS 5.1 Set-Content -Encoding utf8 writes a BOM and can mangle non-ASCII)
   [System.IO.File]::WriteAllText($manifestPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Invoke-Gh {
+  # Runs gh with stderr suppressed. Under $ErrorActionPreference="Stop", PS 5.1
+  # turns native stderr into a terminating NativeCommandError (gh writes status
+  # lines like "Closed issue #N" to stderr), which aborts the whole sync. 2>$null
+  # keeps the run alive; the process exit code is captured for callers.
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GhArgs)
+  $out = & $gh @GhArgs 2>$null
+  $script:ghExitCode = $LASTEXITCODE
+  return $out
+}
+
 function Find-IssueNumber([string]$ticketId) {
-  $found = & $gh issue list --repo $repo --search "in:title $ticketId" --state all --json number,title 2>$null | ConvertFrom-Json
+  $found = Invoke-Gh issue list --repo $repo --search "in:title $ticketId" --state all --json number,title | ConvertFrom-Json
   if ($found) {
     $hit = $found | Where-Object { $_.title.Contains("[$ticketId]") } | Select-Object -First 1
     if ($hit) { return [int]$hit.number }
@@ -54,10 +74,20 @@ function Find-IssueNumber([string]$ticketId) {
 function New-Issue($t) {
   $title = "[$($t.id)] $($t.title)"
   $labels = ($t.labels -join ",")
-  $out = & $gh issue create --repo $repo --title $title --body $t.body --label $labels --assignee $assignee 2>&1
+  $out = Invoke-Gh issue create --repo $repo --title $title --body $t.body --label $labels --assignee $assignee
+  if ($script:ghExitCode -ne 0) {
+    Write-Warning "create failed for $($t.id) (exit $($script:ghExitCode)): $out"
+    return
+  }
   if ($out -match "issues/(\d+)") {
     $t.github_number = [int]$Matches[1]
     Write-Output "created $($t.id) -> #$($t.github_number)"
+    # Manifest status is authoritative: a ticket added as already-closed must
+    # not be left open on GitHub.
+    if ($t.status -eq "closed") {
+      Invoke-Gh issue close $t.github_number --repo $repo | Out-Null
+      Write-Output "closed $($t.id) (#$($t.github_number)) per manifest status"
+    }
   } else {
     Write-Warning "create failed for $($t.id): $out"
   }
@@ -66,12 +96,12 @@ function New-Issue($t) {
 function Update-Issue($t) {
   $title = "[$($t.id)] $($t.title)"
   $labels = ($t.labels -join ",")
-  & $gh issue edit $t.github_number --repo $repo --title $title --body $t.body --add-label $labels --add-assignee $assignee 2>$null | Out-Null
-  $state = (& $gh issue view $t.github_number --repo $repo --json state --jq '.state' 2>$null).Trim()
+  Invoke-Gh issue edit $t.github_number --repo $repo --title $title --body $t.body --add-label $labels --add-assignee $assignee | Out-Null
+  $state = (Invoke-Gh issue view $t.github_number --repo $repo --json state --jq '.state').Trim()
   if ($t.status -eq "closed" -and $state -ne "CLOSED") {
-    & $gh issue close $t.github_number --repo $repo 2>$null | Out-Null
+    Invoke-Gh issue close $t.github_number --repo $repo | Out-Null
   } elseif ($t.status -ne "closed" -and $state -eq "CLOSED") {
-    & $gh issue reopen $t.github_number --repo $repo 2>$null | Out-Null
+    Invoke-Gh issue reopen $t.github_number --repo $repo | Out-Null
   }
   Write-Output "synced $($t.id) (#$($t.github_number))"
 }
@@ -87,7 +117,7 @@ switch ($Mode.ToLower()) {
     foreach ($t in $manifest.tickets) {
       if ($t.id -eq $Id) {
         if (-not $t.github_number) { $t.github_number = Find-IssueNumber $t.id }
-        if ($t.github_number) { & $gh issue close $t.github_number --repo $repo 2>&1 | Out-Null }
+        if ($t.github_number) { Invoke-Gh issue close $t.github_number --repo $repo | Out-Null }
         $t.status = "closed"
         Write-Output "closed $($t.id)"
       }
@@ -98,7 +128,7 @@ switch ($Mode.ToLower()) {
     foreach ($t in $manifest.tickets) {
       if ($t.id -eq $Id) {
         if (-not $t.github_number) { $t.github_number = Find-IssueNumber $t.id }
-        if ($t.github_number) { & $gh issue reopen $t.github_number --repo $repo 2>&1 | Out-Null }
+        if ($t.github_number) { Invoke-Gh issue reopen $t.github_number --repo $repo | Out-Null }
         $t.status = "open"
         Write-Output "reopened $($t.id)"
       }
@@ -112,7 +142,7 @@ switch ($Mode.ToLower()) {
     }
     Save-Manifest
     Write-Output "---"
-    $issues = & $gh issue list --repo $repo --state all --limit 20 --json number,title,labels 2>$null | ConvertFrom-Json
+    $issues = Invoke-Gh issue list --repo $repo --state all --limit 20 --json number,title,labels | ConvertFrom-Json
     foreach ($i in $issues) {
       $lbls = ($i.labels | ForEach-Object { $_.name }) -join ","
       Write-Output ("#{0} {1} [{2}]" -f $i.number, $i.title, $lbls)

@@ -19,14 +19,19 @@ Conventions:
 | OQ-01 | Resolve open questions OQ1/OQ3–OQ9/OQ11 in spec 06 | agent:lineage-designer, agent:poc-orchestrator | design | low | closed | [#6](https://github.com/ta-brook/data_lineage/issues/6) |
 | T-03 | Align Airflow-declared Iceberg outlets to physical identity `nessie.poc/shop_orders` (OQ12) | agent:airflow-expert, agent:iceberg-expert | orchestration | medium | closed | [#7](https://github.com/ta-brook/data_lineage/issues/7) |
 | T-04 | Downgrade spec 04 §3 snapshot-id wording to 'records in Airflow run metadata' (OQ13) | agent:airflow-expert | orchestration | low | closed | [#8](https://github.com/ta-brook/data_lineage/issues/8) |
+| CLN-01 | Close out HOP-01 review drifts (D2/D4/D6/D8/P1/P2/D9) + fix sync-tickets.ps1 | agent:pm-agent, agent:airflow-expert, agent:iceberg-expert, agent:lineage-designer, agent:poc-orchestrator | design | medium | closed | [#9](https://github.com/ta-brook/data_lineage/issues/9) |
 
 ## Sync
 
 ```
-powershell -File scripts/sync-tickets.ps1 --sync     # create/update GitHub issues
-powershell -File scripts/sync-tickets.ps1 --list     # print the board
-powershell -File scripts/sync-tickets.ps1 --close EXE-01
+powershell -File scripts/sync-tickets.ps1 -Mode sync          # create/update GitHub issues
+powershell -File scripts/sync-tickets.ps1 -Mode list          # print the board
+powershell -File scripts/sync-tickets.ps1 -Mode close -Id EXE-01
 ```
+
+PS 5.1 note: use `-Mode <mode>` (the `--sync`/`--list`/`--close` forms do not
+bind to the named parameter under `powershell -File`; the script normalizes
+them, but `-Mode` is the documented form).
 
 Requires `gh` authenticated (`gh auth status`) and `scripts/tickets.json` updated
 first (the PM agent owns this).
