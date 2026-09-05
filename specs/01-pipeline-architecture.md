@@ -21,7 +21,7 @@
 | 1 | MySQL | Debezium | binlog change events |
 | 2 | Debezium connector | Kafka topic | serialized change events (Avro) |
 | 3 | Airflow task (orchestrator) | Spark app | spark-submit (no data movement) |
-| 4 | Spark app (consumer) | Kafka topic | deserialized events (from_avro) |
+| 4 | Spark app (consumer) | Kafka topic | deserialized events (confluent_from_avro) |
 | 5 | Spark app (writer) | Iceberg table | records committed as a snapshot |
 
 ## Key architectural decisions
@@ -45,7 +45,7 @@
 2. Debezium snapshots/streams these events, keyed by MySQL PK, and publishes them to a
    topic whose name maps back to `db.table` (MySQL database = schema).
 3. Airflow DAGs submit Spark apps (SparkSubmitOperator, deploy-mode cluster).
-4. Spark reads the Kafka topic (spark-sql-kafka + from_avro), runs a declarative SQL
+4. Spark reads the Kafka topic (spark-sql-kafka + confluent_from_avro), runs a declarative SQL
    transform, and writes to an Iceberg table via the Nessie catalog.
 5. Iceberg commits each write as a new snapshot, retaining version history per the
    lifecycle policy in spec 05.

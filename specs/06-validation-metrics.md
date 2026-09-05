@@ -44,13 +44,13 @@ designed metadata:
 | Topic/table name drift across hops | Join failure | Single naming convention, enforced in spec 02 |
 | OpenLineage model does not fit CDC hop identity | Model mismatch | Evaluate extension vs. custom facets (kafkaOffset) |
 | **Version drift across images/jars** (Airflow, Spark, Iceberg, Nessie) | Stack breaks | Pin every image and jar tag in spec 07 |
-| **Spark ↔ Confluent Avro deserialization** | Wrong/none data | from_avro UDF; registry reachable from Spark |
+| **Spark ↔ Confluent Avro deserialization** | Wrong/none data | confluent_from_avro UDF; registry reachable from Spark |
 | **runId correlation Airflow ↔ Spark** | Parent/child join fails | parentJobName/parentRunId injection; fallback = read app id from operator |
 | **Port collisions** (8080/8081/8082/8083/8084/9000/9001/9002/13306/19120) | Compose fails | Host-port remap table in spec 07 (resolved set) |
 | **No queryable lineage sink** | Success criteria 1–5 cannot be exercised | RESOLVED for all hops: Marquez receives Debezium CDC events (spec 03/07), Airflow parent-run events, and Spark run events via HTTP transport (spec 04/05) |
 | **`capture_snapshot` MinIO wiring** | Snapshot version marker missing | s3.endpoint + creds passed to pyiceberg (fixed in dags/); validate at bring-up |
 | **Deletes silently dropped** (`op='d'` filtered in Spark apps) | Iceberg diverges from MySQL | Accepted scope cut (OQ11 RESOLVED); tombstone/delete propagation deferred beyond the POC |
-| **from_avro precision claim** (OQ5) | Exactness overclaimed through an opaque UDF | RESOLVED (OQ5): inferred until proven by the OL listener |
+| **confluent_from_avro precision claim** (OQ5) | Exactness overclaimed through an opaque UDF | RESOLVED (OQ5): inferred until proven by the OL listener |
 | **Nessie healthcheck assumes bash** (`/dev/tcp`) | Healthcheck fails if the image lacks bash | Validate at bring-up; fall back to a TCP-only check if needed |
 | **Binlog position not emitted as lineage** | Version-marker chain starts at Kafka offset | Documented limitation; Debezium `source` info is in the envelope for later use |
 | **Nessie commit-hash / writer-metadata facets unimplemented** | Spec 05 promises metadata no artifact captures | Defer or drop from spec 05 until a sink exists |
@@ -86,7 +86,7 @@ designed metadata:
    is the *event* schema. Matches review G1 (spec 02): Debezium's OpenLineage SMT emits
    the envelope as the Kafka dataset schema facet, but the canonical table schema for
    lineage joins is the `after` record.
-5. ~~Is a deterministic **from_avro UDF** "exact" or "inferred" precision?~~
+5. ~~Is a deterministic **confluent_from_avro UDF** "exact" or "inferred" precision?~~
    RESOLVED: **inferred**, not exact, until the openlineage-spark listener proves it can
    trace through the UDF (it cannot today: the UDF is opaque to the logical plan). The
    declarative SELECT after deserialization is exact. Precision rule: exactness is
@@ -160,7 +160,7 @@ designed metadata:
 - 2026-09-04: updated for runnable docker-compose deployment and Spark hop.
 - 2026-09-04: data-architecture review completed (reports/architecture-review.md,
   verdict "fix before execution"); risks added for OL sink absence, capture_snapshot
-  wiring, delete handling, from_avro precision, Nessie healthcheck, binlog marker,
+  wiring, delete handling, confluent_from_avro precision, Nessie healthcheck, binlog marker,
   and unimplemented Nessie facets; port-collision row updated to the final remap set.
 - 2026-09-04: CDC hop wired to OpenLineage — Marquez added to the stack (spec 07),
   Debezium native OL emission (spec 03), lineage model reconciled (spec 02), OQ2/OQ10
@@ -173,7 +173,7 @@ designed metadata:
   version lockstep).
 - 2026-09-04: OQ-01 ticket — open questions OQ1, OQ3–OQ9, OQ11 resolved in the lineage
   model (spec 02) and this file: central store = Marquez (OQ1); additive-only schema
-  evolution (OQ3); `after` record is the canonical table schema facet (OQ4); from_avro
+  evolution (OQ3); `after` record is the canonical table schema facet (OQ4); confluent_from_avro
   UDF is inferred precision (OQ5); `capture_snapshot` read-back kept as the version
   marker (OQ6); Airflow Kafka namespace aligned to `kafka://kafka:9092` via T-02 (OQ7);
   scheduled-run lineage is the run of record, backfills get new run ids (OQ8);

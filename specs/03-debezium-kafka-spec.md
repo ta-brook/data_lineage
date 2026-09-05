@@ -39,7 +39,7 @@ Design of `MySQL → Debezium → Kafka`, including the Docker containers for th
   **envelope** (`before`/`after`/`source`/`op`/`ts_ms`). The dataset schema facet is
   the `after` record (the MySQL columns); the envelope is the event schema.
 - **Spark consumption:** `spark-sql-kafka` does not support custom deserializers.
-  Spark deserializes Confluent Avro via a `from_avro` UDF that strips the 5-byte
+  Spark deserializes Confluent Avro via a `confluent_from_avro` UDF that strips the 5-byte
   Confluent header (magic byte + schema id) and fetches the writer schema from the
   registry per record (see spec 04 / spark-apps).
 
@@ -168,4 +168,4 @@ backend) so MySQL -> Kafka lineage is visible end-to-end.
 
 - Airflow/Spark input dataset names must match `mysql.{db}.{table}` (spec 04).
 - Kafka retention must not exceed Iceberg snapshot retention (spec 05).
-- Spark containers must reach `schema-registry:8081` for the from_avro UDF.
+- Spark containers must reach `schema-registry:8081` for the confluent_from_avro UDF.

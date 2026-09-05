@@ -118,7 +118,7 @@ lineage path is complete only within one `(instance_id, stack_epoch)`.
 |---|---|---|
 | MySQL → Debezium → Kafka | Exact | Passthrough; event schema retains MySQL column names |
 | Kafka → Spark (declarative SQL / explicit column mapping) | Exact | Traceable from the Spark logical plan (columnLineage facet) |
-| Kafka → Spark (opaque UDF / black-box — POC instance: `from_avro` deserialization) | Inferred | The UDF is opaque to the Spark logical plan; the openlineage-spark listener cannot trace through it. The declarative SELECT after deserialization is exact |
+| Kafka → Spark (opaque UDF / black-box — POC instance: `confluent_from_avro` deserialization) | Inferred | The UDF is opaque to the Spark logical plan; the openlineage-spark listener cannot trace through it. The declarative SELECT after deserialization is exact |
 | Spark → Iceberg | Exact | Output columns map to a declared Iceberg schema |
 | Airflow → Spark (orchestration) | N/A | No data movement; parent/child relationship only |
 
@@ -216,7 +216,7 @@ All POC open questions are resolved; see spec 06 for the full list and resolutio
 - ~~Does the dataset schema facet use the Debezium `after` record or the full envelope?~~
   RESOLVED (OQ4): the `after` record is the canonical table schema; the envelope is the
   event schema.
-- ~~Is a deterministic from_avro deserialization UDF "exact" or "inferred" precision?~~
+- ~~Is a deterministic confluent_from_avro deserialization UDF "exact" or "inferred" precision?~~
   RESOLVED (OQ5): inferred until the openlineage-spark listener can trace through the UDF.
 - ~~How does the Spark-emitted Iceberg dataset identity (catalog-qualified
   `nessie.poc` / `shop_orders`) reconcile with the logical `poc` / `shop_orders`?~~

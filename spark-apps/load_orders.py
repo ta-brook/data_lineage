@@ -10,8 +10,10 @@ Lineage identity (spec 02):
                                                capture_snapshot task, spec 04)
 
 Deserialization strategy (spec 03 §3 / spec 05): Confluent Avro is decoded by a
-deterministic, registry-driven from_avro UDF — the writer schema is fetched per
-schema id from the Schema Registry, so decoding never depends on local state.
+deterministic, registry-driven confluent_from_avro UDF — the writer schema is
+fetched per schema id from the Schema Registry, so decoding never depends on local
+state. The UDF is named confluent_from_avro (not from_avro) to avoid shadowing
+Spark's built-in from_avro function (review D8).
 """
 
 import io
@@ -28,7 +30,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-# --- from_avro UDF -----------------------------------------------------------
+# --- confluent_from_avro UDF -------------------------------------------------
 
 # Writer-schema cache per schema id (per executor process). Schema ids are
 # stable per subject version, so this avoids hammering the registry per record.
@@ -69,7 +71,7 @@ ENVELOPE_SCHEMA = StructType([
 ])
 
 
-def from_avro(value_bytes):
+def confluent_from_avro(value_bytes):
     """
     Decode one Confluent Avro Kafka value into (after, op).
 
@@ -131,9 +133,11 @@ def main():
     )
 
     # --- Step 3: deserialize Confluent Avro (spec 03 §3) ---------------------
-    spark.udf.register("from_avro", from_avro, ENVELOPE_SCHEMA)
+    # Registered as confluent_from_avro (not from_avro) so it does not shadow
+    # Spark's built-in from_avro function (review D8).
+    spark.udf.register("confluent_from_avro", confluent_from_avro, ENVELOPE_SCHEMA)
     decoded = raw.selectExpr(
-        "from_avro(value) AS envelope",
+        "confluent_from_avro(value) AS envelope",
         "topic",
         "partition",
         "offset",
