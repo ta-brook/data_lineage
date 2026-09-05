@@ -60,6 +60,7 @@ designed metadata:
 | **CDC job identity derived from topic.prefix+task** (`mysql.0`) | Job collision across connectors | Per-connector `openlineage.integration.job.namespace` (`debezium.shop-orders` / `debezium.shop-customers`) — spec 02/03 |
 | **Spark-emitted Iceberg dataset identity vs logical identity** (`nessie.poc`/`shop_orders` vs `poc`/`shop_orders`) | Sink-side join fails in Marquez (Airflow outlet != Spark output) | RESOLVED (OQ12): catalog-qualified identity is physical; Airflow outlets align to it (T-03); validate at bring-up |
 | **Snapshot id not attached to an OL event** (lives in Airflow XCom/log only) | Version-marker chain does not visibly close inside Marquez | RESOLVED (OQ13): chain closes across Marquez events + Airflow run metadata via the parentRun facet; OL-event attachment is future work; validate at bring-up |
+| **`kafkaOffset` facet is a degenerate `[0, end]` range** (review P2) | The marker does not advance — `startingOffsets=earliest` / `endingOffsets=latest` re-reads the full topic every run, so the facet is a constant cumulative re-scan | ACCEPTED for the POC: documented as a cumulative re-scan (spec 02 version markers); moving to checkpointed offsets is future work |
 
 ## Open questions
 
