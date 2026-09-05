@@ -117,6 +117,19 @@
                                    ],
                         "status":  "closed",
                         "github_number":  9
+                    },
+                    {
+                        "id":  "CLN-02",
+                        "title":  "Final runbook reconciliation: G3 envelope wording + load_customers coverage",
+                        "body":  "Final authoring reconciliation before the execution phase (no bring-up, no testing):\n\n1. CDC review G3 (reports/cdc-openlineage-review.md): spec 07 sec 7 step 7 wording \u0022schema facet shows the columns\u0022 under-describes the envelope shape - the Kafka dataset facet is the full CDC envelope (columns nested under after); the MySQL input dataset shows them flat. Align with spec 02\u0027s schema-facet nuance (G1, OQ4).\n\n2. Runbook completeness: spec 07 sec 7 step 10 only triggers load_orders, but the acceptance criteria reference both poc.shop_orders and poc.shop_customers. Add load_customers coverage (trigger + Marquez chain check) so both DAGs are exercised.\n\nDeliverables: one commit per task per agent referencing CLN-02; STATE.md updated; pushed to origin/main.",
+                        "labels":  [
+                                       "agent:poc-docs-writer",
+                                       "agent:poc-orchestrator",
+                                       "phase:design",
+                                       "priority:low"
+                                   ],
+                        "status":  "closed",
+                        "github_number":  10
                     }
                 ]
 }

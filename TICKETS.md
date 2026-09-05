@@ -20,6 +20,7 @@ Conventions:
 | T-03 | Align Airflow-declared Iceberg outlets to physical identity `nessie.poc/shop_orders` (OQ12) | agent:airflow-expert, agent:iceberg-expert | orchestration | medium | closed | [#7](https://github.com/ta-brook/data_lineage/issues/7) |
 | T-04 | Downgrade spec 04 §3 snapshot-id wording to 'records in Airflow run metadata' (OQ13) | agent:airflow-expert | orchestration | low | closed | [#8](https://github.com/ta-brook/data_lineage/issues/8) |
 | CLN-01 | Close out HOP-01 review drifts (D2/D4/D6/D8/P1/P2/D9) + fix sync-tickets.ps1 | agent:pm-agent, agent:airflow-expert, agent:iceberg-expert, agent:lineage-designer, agent:poc-orchestrator | design | medium | closed | [#9](https://github.com/ta-brook/data_lineage/issues/9) |
+| CLN-02 | Final runbook reconciliation: G3 envelope wording + load_customers coverage | agent:poc-docs-writer, agent:poc-orchestrator | design | low | closed | [#10](https://github.com/ta-brook/data_lineage/issues/10) |
 
 ## Sync
 
