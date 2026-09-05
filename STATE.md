@@ -1,6 +1,6 @@
 # POC State File — Resume Point
 
-**Last saved:** 2026-09-04 (session: Airflow→Spark→Iceberg hop wired to Marquez; T-01/T-02/T-03/T-04 + OQ-01 landed; verdict "ready to test")
+**Last saved:** 2026-09-05 (session: CLN-01 landed — HOP-01 review drifts D2/D4/D6/D8/P1/P2/D9 + sync-tickets.ps1 fixes; verdict "ready to test" unchanged)
 **Working dir:** `C:\Users\user\Documents\github\data_lineage`
 
 This file records exactly what is done and what remains. On resume, read this file first,
@@ -26,10 +26,10 @@ executed or tested** yet.
 |---|---|
 | Specs 00–07 | Complete; all 13 open questions (OQ1–OQ13) resolved |
 | Docker-compose topology (16 services) | Authored, ports/env/healthchecks pinned |
-| DAGs + Spark apps | Authored (`load_orders`, `load_customers`; from_avro UDF, MERGE upsert, `capture_snapshot`) |
+| DAGs + Spark apps | Authored (`load_orders`, `load_customers`; confluent_from_avro UDF, MERGE upsert, `capture_snapshot`) |
 | Lineage wiring | **All three hops emit OpenLineage to Marquez** (Debezium CDC native OL, Airflow parent runs, Spark child runs) |
 | Reviews | 3 completed: architecture (fix applied), CDC hop (**ready to test**), Airflow→Spark→Iceberg hop (**ready to test**) |
-| Ticket board | 6 closed, 2 open (EXE-01, CDC-01) — synced to GitHub |
+| Ticket board | 7 closed, 2 open (EXE-01, CDC-01) — synced to GitHub |
 
 ### Key design decisions locked in
 
@@ -39,7 +39,7 @@ executed or tested** yet.
   (logical `poc.shop_orders` canonical)
 - Version markers: binlog position → Kafka offset → kafkaOffset facet → Iceberg snapshot id
   (in Airflow run metadata)
-- Precision honesty: declarative SQL = exact; from_avro UDF = inferred
+- Precision honesty: declarative SQL = exact; confluent_from_avro UDF = inferred
 
 ### Remaining work (next phase — EXECUTION)
 
@@ -90,7 +90,8 @@ Three review cycles completed:
 | **T-03: Airflow Iceberg outlets → physical `nessie.poc`** | `dags/config.py` (`OUTPUT_NAMESPACE`), `dags/*.py` outlets, specs 04/05 | Done |
 | **T-04: spec 04 §3 snapshot-id wording (OQ13)** | `specs/04-airflow-spec.md` | Done |
 | **OQ-01 + OQ12 + OQ13 resolved** | `specs/02-lineage-model.md`, `specs/06-validation-metrics.md` | Done |
-| Ticket board synced (6 closed, 2 open) | `scripts/tickets.json`, `TICKETS.md`, GitHub issues #1–#8 | Done |
+| **CLN-01: HOP-01 review drifts D2/D4/D6/D8/P1/P2/D9 + sync-tickets.ps1 fixes** | `scripts/sync-tickets.ps1`, `docker-compose.yml`, `Dockerfile.airflow`, `Dockerfile.spark`, `spark-apps/*.py`, specs 01/02/03/05/06/07, `STATE.md`, `TICKETS.md` | Done |
+| Ticket board synced (7 closed, 2 open) | `scripts/tickets.json`, `TICKETS.md`, GitHub issues #1–#9 | Done |
 
 Git history: one commit per task per agent (see `git log --oneline`).
 
@@ -114,21 +115,18 @@ Git history: one commit per task per agent (see `git log --oneline`).
    - `capture_snapshot` reads the CURRENT snapshot (fine for the daily non-overlapping
      schedule) — confirm at bring-up (L8).
    - `kafkaOffset` facet is a degenerate `[0, end]` range (earliest→latest re-read per
-     run) — confirm the facet appears on the Spark run (P2).
+     run) — confirm the facet appears on the Spark run (P2; accepted as a cumulative
+     re-scan, spec 06 risk row).
    - Marquez/Nessie healthchecks assume bash (`/dev/tcp`) — fall back to TCP-only if
      the images lack bash (R2).
-   - `AIRFLOW_USERNAME`/`AIRFLOW_PASSWORD` are not consumed by the official Airflow
-     image (initial admin = `_AIRFLOW_WWW_USER_*`, default airflow/airflow) — D2.
-   - `mc` (bucket) is not a dependency of `spark-master` — a DAG triggered before `mc`
-     runs fails at DDL (D6).
-   - `from_avro` UDF name shadows Spark's built-in `from_avro` (spark-avro jar baked
-     in) — rename if the built-in is needed (D8).
-   - Nessie commit-hash + writer-metadata facets (spec 05 §5) still unimplemented (D9).
-4. **sync-tickets.ps1 fixes** (pm-agent): `gh issue close` aborts under
-   `$ErrorActionPreference="Stop"` (stderr → NativeCommandError); `New-Issue` ignores
-   `status: closed`; `--sync/--list/--close` args don't bind in PS 5.1 `-File`
-   invocation (use `-Mode <mode>`). Workarounds documented; fix before the next
-   session's close-out.
+   - `confluent_from_avro` UDF (renamed from `from_avro` to avoid shadowing Spark's
+     built-in, review D8) — confirm the UDF decodes at bring-up (L8).
+   - Nessie commit-hash + writer-metadata facets (spec 05 §5) — deferred, not captured
+     in the POC (D9; spec 06 risk row).
+4. **DONE (CLN-01)**: sync-tickets.ps1 fixed — `gh issue close` no longer aborts under
+   `$ErrorActionPreference="Stop"` (native stderr suppressed via `Invoke-Gh`); `New-Issue`
+   closes issues whose manifest status is `closed`; `-Mode <mode>` documented as the
+   reliable invocation (script header, TICKETS.md).
 
 ## 4. Key design decisions (do not re-litigate)
 
@@ -137,7 +135,7 @@ Git history: one commit per task per agent (see `git log --oneline`).
 - **Lineage:** `airflow:{dag}.{task}` parent job → `spark:{app_name}` child job;
   parentRunFacet correlation; Spark run is run of record for the data chain.
 - **Precision:** declarative Spark SQL = exact; opaque UDFs = inferred; absence of a
-  columnLineage facet = inferred, never exact. (from_avro UDF = inferred, OQ5 resolved.)
+  columnLineage facet = inferred, never exact. (confluent_from_avro UDF = inferred, OQ5 resolved.)
 - **Version markers:** binlog position → Kafka offset → kafkaOffset facet (Spark) →
   Iceberg snapshot id (captured by pyiceberg read-back task; recorded in Airflow run
   metadata XCom/log — NOT attached to an OL event, OQ13 resolved).
@@ -156,7 +154,7 @@ Git history: one commit per task per agent (see `git log --oneline`).
   environment `dev`, stack_epoch, endpoints (mysql:3306, kafka:9092, connect:8083,
   schema-registry:8081, spark://spark-master:7077, nessie:19120/api/v2,
   s3://poc-warehouse/, openlineage: http://marquez:5000/api/v1/lineage).
-- **Kafka serialization: Avro + Schema Registry kept**; Spark deserializes via a from_avro
+- **Kafka serialization: Avro + Schema Registry kept**; Spark deserializes via a confluent_from_avro
   UDF (magic byte strip + registry fetch). JSON rejected (loses schema facet provenance).
 - **Iceberg:** Nessie `type=nessie` catalog (client-side S3 config; Nessie container
   stays S3-free, RocksDB store), warehouse `s3://poc-warehouse/`, no snapshot expiration
@@ -183,14 +181,16 @@ Git history: one commit per task per agent (see `git log --oneline`).
 | Debezium OpenLineage core | `debezium-openlineage-core:3.6.2.Final` (libs archive, baked into the image) |
 | Marquez API / Web | `marquezproject/marquez:0.50.0` / `marquezproject/marquez-web:0.50.0` (Postgres 14 backend) |
 | Airflow | `apache/airflow:2.11.0` (custom image `data-lineage-poc/airflow:2.11.0`) |
+| Airflow providers (pinned D4) | `apache-airflow-providers-apache-spark==6.3.2`, `apache-airflow-providers-openlineage==2.20.1`, `pyiceberg[nessie,pyarrow,s3fs]==0.11.1` (Dockerfile.airflow) |
 | Postgres (Airflow / Marquez) | `postgres:16` / `postgres:14` |
 | Spark | `apache/spark:3.5.0` (custom image `data-lineage-poc/spark:3.5.0`) |
 | Nessie | `ghcr.io/projectnessie/nessie:0.108.4` (NOT Docker Hub; no UI on 9000) |
-| MinIO | `minio/minio:RELEASE.2025-09-07T16-13-09Z` + `minio/mc:latest` (one-shot) |
+| MinIO | `minio/minio:RELEASE.2025-09-07T16-13-09Z` + `minio/mc:RELEASE.2025-08-13T08-35-41Z` (one-shot; pinned D4) |
 | provision | `curlimages/curl:8.10.1` (one-shot) |
 | Iceberg runtime jar | `iceberg-spark-runtime-3.5_2.12:1.11.0` |
 | Nessie spark extensions | `nessie-spark-extensions-3.5_2.12:0.108.4` (match server minor) |
 | openlineage-spark | `openlineage-spark_2.12:1.52.0` |
+| Spark Python deps (pinned D4) | `fastavro==1.12.2`, `requests==2.34.2` (Dockerfile.spark) |
 
 ## 6. Host port remap (final, collision-free)
 
@@ -215,9 +215,9 @@ Git history: one commit per task per agent (see `git log --oneline`).
 - Open questions OQ1–OQ13 all RESOLVED in `specs/06-validation-metrics.md` (OQ2/OQ10
   CDC hop; OQ1/OQ3–OQ9/OQ11 OQ-01; OQ12 physical Iceberg identity; OQ13 snapshot-id
   in run metadata).
-- `sync-tickets.ps1` script bugs (close aborts under EAP Stop; `New-Issue` ignores
-  `status: closed`; `--mode` args don't bind in PS 5.1 — use `-Mode <mode>`) — fix
-  before the next session's close-out.
+- `sync-tickets.ps1` script bugs — FIXED (CLN-01): close/reopen no longer abort under
+  EAP Stop (native stderr suppressed via `Invoke-Gh`); `New-Issue` honors manifest
+  `status: closed`; `-Mode <mode>` documented as the reliable invocation.
 - The stack is authored, not executed — the spec 07 §7 runbook is the acceptance test.
 
 ## 8. Resume instructions
@@ -225,9 +225,8 @@ Git history: one commit per task per agent (see `git log --oneline`).
 1. Read this file.
 2. Next phase = EXECUTION (section 3): bring up the stack and run the spec 07 runbook.
    This requires running/building/testing, which design sessions must NOT do.
-3. If resuming design work: fix the `sync-tickets.ps1` script bugs (pm-agent), then
-   update specs/artifacts with per-agent commits (one commit per task per agent),
-   update this file, and push (session-workflow skill).
+3. If resuming design work: update specs/artifacts with per-agent commits (one commit
+   per task per agent), update this file, and push (session-workflow skill).
 
 ## 9. Tickets (GitHub board)
 
@@ -240,4 +239,5 @@ Every task is tracked as a GitHub issue in `ta-brook/data_lineage`, assigned to
   (requires `gh` auth; `gh` at `C:\Users\user\AppData\Local\Programs\gh\bin\gh.exe`)
 - Owner: pm-agent (`.opencode/agents/pm-agent.md`) — syncs at session start/close
 - Current board: EXE-01 (#1, open), CDC-01 (#2, open), T-01 (#3, closed), T-02 (#4,
-  closed), HOP-01 (#5, closed), OQ-01 (#6, closed), T-03 (#7, closed), T-04 (#8, closed)
+  closed), HOP-01 (#5, closed), OQ-01 (#6, closed), T-03 (#7, closed), T-04 (#8, closed),
+  CLN-01 (#9, closed)
