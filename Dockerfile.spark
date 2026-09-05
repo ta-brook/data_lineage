@@ -63,10 +63,11 @@ RUN curl -fsSL -o /opt/spark/jars/hadoop-aws-3.3.4.jar \
 RUN curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
     https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
 
-# --- Python deps for the from_avro UDF (spark-apps/load_*.py) ----------------
+# --- Python deps for the confluent_from_avro UDF (spark-apps/load_*.py) ------
 # fastavro: decode Confluent Avro payloads with the registry writer schema.
 # requests: fetch the writer schema JSON from http://schema-registry:8081.
-RUN pip install --no-cache-dir fastavro requests
+# Versions pinned (D4) per the spec 06 version-drift risk.
+RUN pip install --no-cache-dir fastavro==1.12.2 requests==2.34.2
 
 # --- Spark defaults ----------------------------------------------------------
 # Nessie catalog, S3A mirror, OpenLineage listener, SQL extensions.

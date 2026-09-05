@@ -353,7 +353,7 @@ services:
   # One-shot provisioning gates
   # ---------------------------------------------------------------------------
   mc:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z # pinned (D4); matches the minio/minio pin era
     container_name: mc
     entrypoint: ["/bin/sh", "/provisioning/mc-init.sh"]
     environment:

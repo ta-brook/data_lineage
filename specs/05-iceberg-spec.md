@@ -96,7 +96,7 @@ jobs (OQ12 RESOLVED, spec 06):
 |---|---|---|---|---|
 | `nessie` | `ghcr.io/projectnessie/nessie:0.108.4` | 19120 | `nessie-data:/data` | `NESSIE_VERSION_STORE_TYPE=ROCKSDB`, `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH=/data/nessie` |
 | `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | 9000 (S3), 9002→9001 (console) | `minio-data` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_REGION=us-east-1` |
-| `mc` | `minio/mc:latest` (one-shot) | — | — | creates bucket `poc-warehouse` |
+| `mc` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` (one-shot; pinned D4) | — | — | creates bucket `poc-warehouse` |
 
 ### How it connects to neighbors
 

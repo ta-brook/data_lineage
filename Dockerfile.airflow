@@ -16,9 +16,11 @@
 FROM apache/airflow:2.11.0
 
 USER root
+# Versions pinned (D4): providers + pyiceberg must match the Airflow 2.11.0 base
+# and the openlineage-spark 1.52.0 listener (spec 06 version-drift risk).
 RUN pip install --no-cache-dir \
-        apache-airflow-providers-apache-spark \
-        apache-airflow-providers-openlineage \
-        "pyiceberg[nessie,pyarrow,s3fs]" \
+        apache-airflow-providers-apache-spark==6.3.2 \
+        apache-airflow-providers-openlineage==2.20.1 \
+        "pyiceberg[nessie,pyarrow,s3fs]==0.11.1" \
         pyspark==3.5.0
 USER airflow
