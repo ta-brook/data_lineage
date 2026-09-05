@@ -343,6 +343,17 @@ docker compose exec airflow-webserver airflow dags trigger load_orders
 #     expect: columnLineage facet on the Spark run (exact for the declarative SELECT;
 #             total_price = quantity * unit_price), kafkaOffset facet, snapshot id
 #             captured by capture_snapshot (xcom snapshot_id)
+
+# 10b. Repeat for the customers dataset (acceptance criteria cover both tables):
+docker compose exec airflow-webserver airflow dags trigger load_customers
+#     wait for spark_load_customers + capture_snapshot to COMPLETE
+#     Marquez UI http://localhost:3000 -> search "shop_customers":
+#       debezium.shop-customers:mysql.0
+#         -> kafka://kafka:9092/mysql.shop.customers
+#         -> airflow:load_customers.spark_load_customers (parent)
+#         -> spark:load_customers (child, run of record)
+#     expect: columnLineage facet (1:1 passthrough), kafkaOffset facet, snapshot id
+#             captured by capture_snapshot (xcom snapshot_id)
 ```
 
 Acceptance criteria map to the lineage model (spec 02): topic names
