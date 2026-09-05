@@ -154,8 +154,12 @@ def main():
 
     # --- Step 4: passthrough transform (EXACT column lineage) ----------------
     # Explicit 1:1 column list, no derived columns (spec 04 §4: passthrough /
-    # copy = exact lineage). Deletes (op='d') are out of POC scope: tombstones
-    # and delete events both carry after=null and are dropped here.
+    # copy = exact lineage). Precision qualifier (OQ5, review P1): exactness
+    # holds DOWNSTREAM of the confluent_from_avro UDF — the declarative SELECT
+    # after deserialization is exact; the UDF itself is opaque to the logical
+    # plan, so the facet leaves at the raw `value` column (inferred through the
+    # UDF). Deletes (op='d') are out of POC scope: tombstones and delete events
+    # both carry after=null and are dropped here.
     transformed = spark.sql("""
         SELECT
             after.customer_id AS customer_id,

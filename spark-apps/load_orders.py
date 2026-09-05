@@ -162,6 +162,10 @@ def main():
     # Every output column is mapped from an input column (or a visible SQL
     # expression) in the logical plan -> the openlineage-spark listener can
     # emit a complete columnLineage facet (spec 02 precision rules).
+    # Precision qualifier (OQ5, review P1): exactness holds DOWNSTREAM of the
+    # confluent_from_avro UDF — the declarative SELECT after deserialization is
+    # exact; the UDF itself is opaque to the logical plan, so the facet leaves
+    # at the raw `value` column (inferred through the UDF).
     # total_price is derived: after.quantity * after.unit_price (exact lineage
     # demo — the expression is visible in the plan, not hidden in a UDF).
     # Deletes (op='d') are out of POC scope: tombstones and delete events both
