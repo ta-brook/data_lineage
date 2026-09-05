@@ -101,6 +101,22 @@
                                    ],
                         "status":  "closed",
                         "github_number":  8
+                    },
+                    {
+                        "id":  "CLN-01",
+                        "title":  "Close out HOP-01 review drifts (D2/D4/D6/D8/P1/P2/D9) + fix sync-tickets.ps1",
+                        "body":  "Close out the non-test follow-ups from the HOP-01 review (reports/airflow-spark-iceberg-review.md) and the sync-tickets.ps1 script bugs (STATE.md sec 3 item 4).\n\nScope (design/authoring only - no bring-up, no testing):\n\n1. sync-tickets.ps1 fixes (pm-agent): gh issue close/reopen aborts under $ErrorActionPreference=\u0022Stop\u0022 (native stderr -> NativeCommandError); New-Issue ignores manifest status: closed; --sync/--list/--close args don\u0027t bind in PS 5.1 -File invocation; document -Mode <mode> usage (script header, TICKETS.md, STATE.md).\n\n2. D2 (airflow-expert): AIRFLOW_USERNAME/AIRFLOW_PASSWORD are not consumed by the official apache/airflow image; switch compose + spec 07 to _AIRFLOW_WWW_USER_USERNAME/_AIRFLOW_WWW_USER_PASSWORD (defaults admin/admin).\n\n3. D4 (iceberg-expert): pin unpinned versions - minio/mc:latest, pyiceberg, apache-airflow-providers-apache-spark, apache-airflow-providers-openlineage (Dockerfile.airflow), fastavro + requests (Dockerfile.spark). Update STATE.md pins + spec 05/07 tables.\n\n4. D6 (poc-orchestrator): add mc (service_completed_successfully) to spark-master depends_on so the bucket exists before Spark DDL; update spec 07 sec 6 + spec 05 sec 6.\n\n5. D8 (iceberg-expert): rename from_avro UDF to confluent_from_avro in both Spark apps (avoids shadowing Spark\u0027s builtin from_avro); update Dockerfile.spark comment + specs 01/03/06 + STATE.md references. Reports stay as historical snapshots.\n\n6. P1 (iceberg-expert): add the OQ5 \u0022downstream of the UDF\u0022 qualifier to Step-4 comments in both apps (exact only for the declarative SELECT after deserialization).\n\n7. D9 (iceberg-expert): annotate spec 05 sec 5 Nessie commit-hash + writer-metadata facets as deferred (not captured in the POC); align spec 06 risk row + spec 02 enrichment note.\n\n8. P2 (lineage-designer): add spec 06 risk row documenting the kafkaOffset facet as a degenerate [0,end] cumulative re-scan (earliest->latest per run), accepted for the POC.\n\n9. Doc drift (poc-docs-writer): spec 06 follow-up ticket table lists T-03/T-04 as Open; they are closed (#7/#8).\n\nDeliverables: one commit per task per agent, each referencing CLN-01; tickets.json/TICKETS.md updated; board synced; STATE.md updated; pushed to origin/main.",
+                        "labels":  [
+                                       "agent:pm-agent",
+                                       "agent:airflow-expert",
+                                       "agent:iceberg-expert",
+                                       "agent:lineage-designer",
+                                       "agent:poc-orchestrator",
+                                       "phase:design",
+                                       "priority:medium"
+                                   ],
+                        "status":  "closed",
+                        "github_number":  9
                     }
                 ]
 }
