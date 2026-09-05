@@ -317,7 +317,9 @@ docker compose exec kafka kafka-console-consumer \
 #         lineage: mysql://mysql:3306/shop.orders
 #                   -> debezium.shop-orders:mysql.0
 #                   -> kafka://kafka:9092/mysql.shop.orders
-#         run state RUNNING; schema facet shows the columns
+#         run state RUNNING; schema facet: the MySQL input dataset shows the flat
+#         source columns; the Kafka output dataset shows the CDC envelope (columns
+#         nested under `after`) - spec 02 schema-facet nuance (G1/OQ4, review G3)
 #    API (raw events):
 curl -s "http://localhost:5000/api/v1/events/lineage?limit=5"
 #    expect: JSON events with eventType START/RUNNING, job debezium.shop-orders:mysql.0
