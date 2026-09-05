@@ -161,8 +161,11 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
       AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
-      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
-      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+      # Initial admin user for the official apache/airflow image (D2): the image
+      # entrypoint creates the admin from _AIRFLOW_WWW_USER_* (NOT AIRFLOW_USERNAME/
+      # AIRFLOW_PASSWORD, which the image ignores). Defaults admin/admin.
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
       AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type": "http", "url": "http://marquez:5000/api/v1/lineage"}' # Marquez sink (spec 04; T-01)
       AIRFLOW__OPENLINEAGE__NAMESPACE: airflow # matches the DAGs' inline pin (spec 02/04)

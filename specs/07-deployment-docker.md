@@ -200,7 +200,7 @@ Cross-service wiring values. Secrets come from `.env` (template: `.env.example`)
 | airflow-* | `AIRFLOW__OPENLINEAGE__TRANSPORT` | `{"type": "http", "url": "http://marquez:5000/api/v1/lineage"}` | Marquez sink (ticket T-01); DAGs pin the same transport inline |
 | airflow-* | `AIRFLOW__OPENLINEAGE__NAMESPACE` | `airflow` | parent job namespace `airflow:{dag}.{task}` (spec 02/04) |
 | airflow-* | `AIRFLOW__CORE__FERNET_KEY` / `AIRFLOW__WEBSERVER__SECRET_KEY` | `${FERNET_KEY}` / `${AIRFLOW__WEBSERVER__SECRET_KEY}` | secrets (from `.env`) |
-| airflow-* | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | `${AIRFLOW_USERNAME:-admin}` / `${AIRFLOW_PASSWORD:-admin}` | UI login |
+| airflow-* | `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` | `${AIRFLOW_USERNAME:-admin}` / `${AIRFLOW_PASSWORD:-admin}` | UI login — the official image entrypoint creates the initial admin from `_AIRFLOW_WWW_USER_*` (D2); `AIRFLOW_USERNAME`/`AIRFLOW_PASSWORD` are the `.env` inputs |
 | nessie | `NESSIE_VERSION_STORE_TYPE` | `ROCKSDB` | catalog metadata persisted to the named volume |
 | nessie | `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH` | `/data/nessie` | RocksDB data directory |
 | minio | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `${MINIO_ROOT_USER:-pocadmin}` / `${MINIO_ROOT_PASSWORD}` | S3 credentials (secret) |
