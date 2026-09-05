@@ -152,8 +152,8 @@ designed metadata:
 |---|---|---|---|---|
 | T-01 | Switch Airflow + Spark OpenLineage transports from console to Marquez (`http://marquez:5000`, endpoint `api/v1/lineage`) when those hops are implemented | airflow-expert, iceberg-expert | spec 04/05, dags/, spark-defaults.conf | Closed (2026-09-04) |
 | T-02 | Align Airflow-declared Kafka dataset namespace to `kafka://kafka:9092` (currently bare `kafka`) so Airflow and Spark hops join in Marquez | airflow-expert | spec 04, dags/ inlets | Closed (2026-09-04) |
-| T-03 | Align Airflow-declared Iceberg outlets to the physical identity `nessie.poc`/`shop_orders` (currently logical `poc`/`shop_orders`) so Airflow and Spark hops join on the sink side in Marquez | airflow-expert, iceberg-expert | spec 04/05, dags/load_orders.py, dags/load_customers.py | Open |
-| T-04 | Downgrade spec 04 §3 wording: `capture_snapshot` "attaches it as the output version marker" → "records the snapshot id in Airflow run metadata (XCom/log)"; the snapshot id is not attached to an OL event in the POC (OQ13) | airflow-expert | spec 04 | Open |
+| T-03 | Align Airflow-declared Iceberg outlets to the physical identity `nessie.poc`/`shop_orders` (currently logical `poc`/`shop_orders`) so Airflow and Spark hops join on the sink side in Marquez | airflow-expert, iceberg-expert | spec 04/05, dags/load_orders.py, dags/load_customers.py | Closed (2026-09-04) |
+| T-04 | Downgrade spec 04 §3 wording: `capture_snapshot` "attaches it as the output version marker" → "records the snapshot id in Airflow run metadata (XCom/log)"; the snapshot id is not attached to an OL event in the POC (OQ13) | airflow-expert | spec 04 | Closed (2026-09-04) |
 
 ## Change log
 
