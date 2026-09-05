@@ -54,11 +54,14 @@ function Save-Manifest {
 function Invoke-Gh {
   # Runs gh with stderr suppressed. Under $ErrorActionPreference="Stop", PS 5.1
   # turns native stderr into a terminating NativeCommandError (gh writes status
-  # lines like "Closed issue #N" to stderr), which aborts the whole sync. 2>$null
-  # keeps the run alive; the process exit code is captured for callers.
+  # lines like "Closed issue #N" to stderr), which aborts the whole sync. The
+  # EAP=Continue scope + 2>$null keeps the run alive; the process exit code is
+  # captured for callers.
   param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GhArgs)
+  $ErrorActionPreference = "Continue"
   $out = & $gh @GhArgs 2>$null
   $script:ghExitCode = $LASTEXITCODE
+  $ErrorActionPreference = "Stop"
   return $out
 }
 
@@ -74,7 +77,13 @@ function Find-IssueNumber([string]$ticketId) {
 function New-Issue($t) {
   $title = "[$($t.id)] $($t.title)"
   $labels = ($t.labels -join ",")
-  $out = Invoke-Gh issue create --repo $repo --title $title --body $t.body --label $labels --assignee $assignee
+  # Body via --body-file: PS 5.1 does not escape embedded double quotes when
+  # passing a string to a native command, which corrupts --body (e.g. a body
+  # containing `$ErrorActionPreference="Stop"`). A temp file avoids the issue.
+  $bodyFile = Join-Path $env:TEMP ("cln-body-{0}.md" -f $t.id)
+  [System.IO.File]::WriteAllText($bodyFile, $t.body, (New-Object System.Text.UTF8Encoding($false)))
+  $out = Invoke-Gh issue create --repo $repo --title $title --body-file $bodyFile --label $labels --assignee $assignee
+  Remove-Item $bodyFile -ErrorAction SilentlyContinue
   if ($script:ghExitCode -ne 0) {
     Write-Warning "create failed for $($t.id) (exit $($script:ghExitCode)): $out"
     return
@@ -96,7 +105,11 @@ function New-Issue($t) {
 function Update-Issue($t) {
   $title = "[$($t.id)] $($t.title)"
   $labels = ($t.labels -join ",")
-  Invoke-Gh issue edit $t.github_number --repo $repo --title $title --body $t.body --add-label $labels --add-assignee $assignee | Out-Null
+  # Body via --body-file (see New-Issue for the PS 5.1 quoting rationale).
+  $bodyFile = Join-Path $env:TEMP ("cln-body-{0}.md" -f $t.id)
+  [System.IO.File]::WriteAllText($bodyFile, $t.body, (New-Object System.Text.UTF8Encoding($false)))
+  Invoke-Gh issue edit $t.github_number --repo $repo --title $title --body-file $bodyFile --add-label $labels --add-assignee $assignee | Out-Null
+  Remove-Item $bodyFile -ErrorAction SilentlyContinue
   $state = (Invoke-Gh issue view $t.github_number --repo $repo --json state --jq '.state').Trim()
   if ($t.status -eq "closed" -and $state -ne "CLOSED") {
     Invoke-Gh issue close $t.github_number --repo $repo | Out-Null
