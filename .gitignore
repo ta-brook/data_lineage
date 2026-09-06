@@ -4,3 +4,8 @@
 
 # Internal opencode tooling (agent configs + skills) — team-internal, not shipped
 .opencode/
+# Downloaded Spark/Airflow jars (build cache; large binaries, not committed)
+jars/
+
+# Python bytecode
+__pycache__/

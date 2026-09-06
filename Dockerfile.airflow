@@ -15,6 +15,26 @@
 
 FROM apache/airflow:3.2.2
 
+# Airflow 3 is a slimmed image with NO JVM or `ps` - but this hop uses the
+# SparkSubmitOperator (spark-submit client) which requires Java + procps.
+# Install OpenJDK 17 (Spark 3.5 supports 8/11/17) and procps (ps) as root,
+# then restore the default airflow user.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-17-jre-headless procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> /etc/bash.bashrc
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+# In client deploy-mode the PySpark driver runs in this container, so it needs
+# the same Iceberg/Nessie/Kafka/Avro/OpenLineage/S3A jars as the Spark image
+# (Dockerfile.spark). COPY them from a build context dir (jars/) - see the
+# compose build context note; the versions mirror Dockerfile.spark exactly.
+COPY jars/*.jar /opt/spark/jars/
+# Client driver also needs the spark-defaults.conf (Nessie catalog, S3A mirror,
+# OpenLineage listener) so the driver and workers agree on the catalog config.
+COPY spark-defaults.conf /opt/spark/conf/spark-defaults.conf
+USER airflow
+
 # Versions pinned (D4): providers + pyiceberg must match the Airflow 3.2.2 base
 # and the openlineage-spark 1.52.0 listener (spec 06 version-drift risk).
 # Note: the apache/airflow image ships a pip wrapper that rejects `pip install`
@@ -24,4 +44,5 @@ RUN pip install --no-cache-dir \
         apache-airflow-providers-apache-spark==6.3.2 \
         apache-airflow-providers-openlineage==2.20.1 \
         "pyiceberg[nessie,pyarrow,s3fs]==0.11.1" \
-        pyspark==3.5.0
+        pyspark==3.5.0 \
+        fastavro==1.12.2 requests==2.32.4

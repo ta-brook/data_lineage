@@ -50,3 +50,48 @@ SPARK_MASTER = "spark://spark-master:7077"
 SPARK_APP_DIR = "/opt/spark-apps"
 SPARK_APP_ORDERS = "/opt/spark-apps/load_orders.py"
 SPARK_APP_CUSTOMERS = "/opt/spark-apps/load_customers.py"
+
+# Spark conf passed by the SparkSubmitOperator (client mode). Mirrors
+# spark-defaults.conf so the client-mode driver (running in the Airflow
+# container) gets the Nessie/Iceberg catalog + S3A + OpenLineage config that the
+# spark-defaults.conf would otherwise provide on the Spark workers. Kept in sync
+# with spark-defaults.conf (spec 05); the MinIO creds are POC values that MUST
+# match .env.example (Spark does not expand ${VAR} in spark-defaults.conf).
+SPARK_CONF = {
+    # Jars for the client-mode driver (Iceberg/Nessie/Kafka/Avro/OpenLineage/S3A),
+    # baked into the Airflow image at /opt/spark/jars (Dockerfile.airflow).
+    "spark.jars": "/opt/spark/jars/*",
+    # Nessie catalog (Iceberg)
+    "spark.sql.catalog.nessie": "org.apache.iceberg.spark.SparkCatalog",
+    "spark.sql.catalog.nessie.type": "nessie",
+    "spark.sql.catalog.nessie.uri": NESSIE_URI,
+    "spark.sql.catalog.nessie.ref": NESSIE_REF,
+    "spark.sql.catalog.nessie.warehouse": WAREHOUSE,
+    "spark.sql.catalog.nessie.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
+    "spark.sql.catalog.nessie.s3.endpoint": MINIO_ENDPOINT,
+    "spark.sql.catalog.nessie.s3.region": "us-east-1",
+    "spark.sql.catalog.nessie.s3.path-style-access": "true",
+    # Iceberg S3FileIO (MinIO) needs client.region for the AWS SDK v2 client;
+    # s3.region alone is not enough in some versions.
+    "spark.sql.catalog.nessie.client.region": "us-east-1",
+    # Belt-and-suspenders: AWS SDK v2 default region chain also honors -Daws.region.
+    "spark.driver.extraJavaOptions": "-Daws.region=us-east-1",
+    "spark.executor.extraJavaOptions": "-Daws.region=us-east-1",
+    "spark.sql.catalog.nessie.s3.access-key-id": os.environ.get("MINIO_ROOT_USER", "pocadmin"),
+    "spark.sql.catalog.nessie.s3.secret-access-key": os.environ.get("MINIO_ROOT_PASSWORD", "minio-poc-secret"),
+    # S3A mirror for Hadoop
+    "spark.hadoop.fs.s3a.endpoint": MINIO_ENDPOINT,
+    "spark.hadoop.fs.s3a.path.style.access": "true",
+    "spark.hadoop.fs.s3a.access.key": os.environ.get("MINIO_ROOT_USER", "pocadmin"),
+    "spark.hadoop.fs.s3a.secret.key": os.environ.get("MINIO_ROOT_PASSWORD", "minio-poc-secret"),
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
+    "spark.hadoop.fs.s3a.aws.credentials.provider": "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+    # OpenLineage listener -> Marquez (spec 02/04; child spark:{app} run of record)
+    "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
+    "spark.openlineage.transport.type": "http",
+    "spark.openlineage.transport.url": "http://marquez:5000/api/v1/lineage",
+    "spark.openlineage.namespace": "spark",
+    # SQL extensions (MERGE INTO + Nessie DDL)
+    "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,org.projectnessie.spark.extensions.NessieSparkSessionExtensions",
+    "spark.sql.catalogImplementation": "in-memory",
+}

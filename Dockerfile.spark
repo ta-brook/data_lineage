@@ -14,7 +14,19 @@ USER root
 # --- curl for Maven Central downloads ----------------------------------------
 # Defensive: ensure curl exists in the base image before downloading jars.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl software-properties-common \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Python 3.13 (match the Airflow 3.x client driver) ----------------------
+# PySpark requires driver and executor Python minor versions to match. The
+# Airflow 3.2.2 driver runs Python 3.13, but apache/spark:3.5.0 ships Python
+# 3.8. Install Python 3.13 (deadsnakes PPA) and make it the default python3 so
+# executors run the same version as the driver.
+RUN add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends python3.13 python3.13-distutils python3.13-venv \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 100 \
+    && update-alternatives --set python3 /usr/bin/python3.13 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Iceberg Spark runtime (Spark 3.5 / Scala 2.12) --------------------------
@@ -41,6 +53,24 @@ RUN curl -fsSL -o /opt/spark/jars/nessie-spark-extensions-3.5_2.12-0.108.4.jar \
 RUN curl -fsSL -o /opt/spark/jars/spark-sql-kafka-0-10_2.12-3.5.0.jar \
     https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.0/spark-sql-kafka-0-10_2.12-3.5.0.jar
 
+# --- kafka-clients (spark-sql-kafka dependency) -----------------------------
+# spark-sql-kafka needs kafka-clients at runtime; the apache/spark base image
+# does not bundle it. Version matched to spark-sql-kafka 3.5.0.
+RUN curl -fsSL -o /opt/spark/jars/kafka-clients-3.5.0.jar \
+    https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.5.0/kafka-clients-3.5.0.jar
+
+# --- spark-token-provider-kafka (spark-sql-kafka dependency) ----------------
+# org.apache.spark.kafka010.KafkaConfigUpdater lives here (moved out of
+# spark-sql-kafka in Spark 3.x); required by the driver for Kafka reads.
+RUN curl -fsSL -o /opt/spark/jars/spark-token-provider-kafka-0-10_2.12-3.5.0.jar \
+    https://repo1.maven.org/maven2/org/apache/spark/spark-token-provider-kafka-0-10_2.12/3.5.0/spark-token-provider-kafka-0-10_2.12-3.5.0.jar
+
+# --- commons-pool2 (kafka-clients dependency) -------------------------------
+# kafka-clients' KafkaDataConsumer uses Apache Commons Pool 2; the apache/spark
+# base image does not bundle it. Missing -> KafkaDataConsumer$ static-init fails.
+RUN curl -fsSL -o /opt/spark/jars/commons-pool2-2.11.1.jar \
+    https://repo1.maven.org/maven2/org/apache/commons/commons-pool2/2.11.1/commons-pool2-2.11.1.jar
+
 # --- spark-avro --------------------------------------------------------------
 # Avro support (from_avro/to_avro functions); complements the Python fastavro
 # UDF used for Confluent Avro deserialization (spec 03 §3).
@@ -66,10 +96,11 @@ RUN curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
 # --- Python deps for the confluent_from_avro UDF (spark-apps/load_*.py) ------
 # fastavro: decode Confluent Avro payloads with the registry writer schema.
 # requests: fetch the writer schema JSON from http://schema-registry:8081.
-# Versions pinned (D4) per the spec 06 version-drift risk. NOTE: apache/spark:3.5.0
-# ships Python 3.8.10, so fastavro must be <=1.9.7 and requests <=2.32.4
-# (fastavro>=1.10 and requests>=2.33 require Python >=3.10).
-RUN pip install --no-cache-dir fastavro==1.9.7 requests==2.32.4
+# Versions pinned (D4) per the spec 06 version-drift risk. Python is now 3.13
+# (matching the Airflow 3.x driver), so fastavro 1.12.2 / requests 2.32.4 are used
+# (they require Python >=3.10; on 3.8 they had to be older pins).
+RUN python3.13 -m ensurepip \
+    && python3.13 -m pip install --no-cache-dir fastavro==1.12.2 requests==2.32.4
 
 # --- Spark defaults ----------------------------------------------------------
 # Nessie catalog, S3A mirror, OpenLineage listener, SQL extensions.

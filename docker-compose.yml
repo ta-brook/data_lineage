@@ -163,6 +163,13 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
       AIRFLOW__API__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
       AIRFLOW__API__EXPOSE_CONFIG: "true"
+      # Airflow 3: the scheduler's LocalExecutor spawns tasks that connect back to
+      # the api-server's execution API. Default is localhost:8080 (the container's
+      # own loopback) -> point it at the api-server service instead.
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      # Airflow 3: JWT used to authenticate task-runner <-> execution API must be
+      # identical across scheduler (signs) and api-server (validates).
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__WEBSERVER__SECRET_KEY}
       # Airflow 3: db migrate is explicit (no auto-migrate like 2.x) - run it on
       # the api-server so the webserver starts with a migrated metadata DB.
       _AIRFLOW_DB_MIGRATE: "true"
@@ -172,7 +179,7 @@ services:
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USERNAME:-admin}
       _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
-      AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type": "http", "url": "http://marquez:5000/api/v1/lineage"}' # Marquez sink (spec 04; T-01)
+      AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type": "http", "url": "http://marquez:5000", "endpoint": "/api/v1/lineage"}' # Marquez sink (spec 04; T-01)
       AIRFLOW__OPENLINEAGE__NAMESPACE: airflow # matches the DAGs' inline pin (spec 02/04)
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pocadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD} # for pyiceberg capture_snapshot read-back
@@ -196,6 +203,22 @@ services:
       dockerfile: Dockerfile.airflow
     container_name: airflow-scheduler
     command: airflow scheduler
+    environment: *airflow-env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./spark-apps:/opt/spark-apps
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    networks: [lineage-poc]
+
+  airflow-dag-processor:
+    image: data-lineage-poc/airflow:3.2.2
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    container_name: airflow-dag-processor
+    command: airflow dag-processor
     environment: *airflow-env
     volumes:
       - ./dags:/opt/airflow/dags

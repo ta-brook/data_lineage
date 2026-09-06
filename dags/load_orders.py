@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.configuration import conf
-from airflow.datasets import Dataset
+from airflow.sdk.definitions.asset import Asset
 from airflow.operators.python import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 # "airflow" so the parent job identity is exactly airflow:load_orders.spark_load_orders
 # (spec 02/04).
 try:
-    conf.set("openlineage", "transport", '{"type": "http", "url": "http://marquez:5000/api/v1/lineage"}')
+    conf.set("openlineage", "transport", '{"type": "http", "url": "http://marquez:5000", "endpoint": "/api/v1/lineage"}')
     conf.set("openlineage", "namespace", "airflow")
 except Exception:
     # Config may be read-only in some contexts; the compose env
@@ -64,13 +64,20 @@ spark_load_orders = SparkSubmitOperator(
     conn_id="spark_default",
     application=config.SPARK_APP_ORDERS,
     name="load_orders",  # child job identity spark:load_orders (spec 04)
-    deploy_mode="cluster",
-    master=config.SPARK_MASTER,
+    deploy_mode="client",
+    conf=config.SPARK_CONF,
     application_args=[],  # the app reads its config from env/args; keep it simple
-    inlets=[Dataset(config.KAFKA_NAMESPACE, config.TOPIC_ORDERS)],
-    outlets=[Dataset(config.OUTPUT_NAMESPACE, "shop_orders")],
     dag=dag,
 )
+# Airflow 3: inlets/outlets are instance attributes (Assets), not constructor
+# kwargs. The SparkSubmitOperator extractor declares these as lineage datasets
+# and injects spark.openlineage.parentJobName/parentRunId into the Spark conf.
+spark_load_orders.inlets = [
+    Asset(uri=f"{config.KAFKA_NAMESPACE}/{config.TOPIC_ORDERS}")
+]
+spark_load_orders.outlets = [
+    Asset(uri=f"{config.OUTPUT_NAMESPACE}/shop_orders")
+]
 
 
 def capture_snapshot(**context):
