@@ -33,7 +33,7 @@ RUN curl -fsSL -o /opt/spark/jars/iceberg-aws-bundle-1.11.0.jar \
 # NessieSparkSessionExtensions: Nessie catalog refs + DDL. Version matches the
 # Nessie server minor (0.108.x) per spec 05 cross-dependencies.
 RUN curl -fsSL -o /opt/spark/jars/nessie-spark-extensions-3.5_2.12-0.108.4.jar \
-    https://repo1.maven.org/maven2/org/projectnessie/nessie-spark-extensions-3.5_2.12/0.108.4/nessie-spark-extensions-3.5_2.12-0.108.4.jar
+    https://repo1.maven.org/maven2/org/projectnessie/nessie-integrations/nessie-spark-extensions-3.5_2.12/0.108.4/nessie-spark-extensions-3.5_2.12-0.108.4.jar
 
 # --- spark-sql-kafka ---------------------------------------------------------
 # Kafka source for batch reads (spark.read.format("kafka")) on the
@@ -66,8 +66,10 @@ RUN curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
 # --- Python deps for the confluent_from_avro UDF (spark-apps/load_*.py) ------
 # fastavro: decode Confluent Avro payloads with the registry writer schema.
 # requests: fetch the writer schema JSON from http://schema-registry:8081.
-# Versions pinned (D4) per the spec 06 version-drift risk.
-RUN pip install --no-cache-dir fastavro==1.12.2 requests==2.34.2
+# Versions pinned (D4) per the spec 06 version-drift risk. NOTE: apache/spark:3.5.0
+# ships Python 3.8.10, so fastavro must be <=1.9.7 and requests <=2.32.4
+# (fastavro>=1.10 and requests>=2.33 require Python >=3.10).
+RUN pip install --no-cache-dir fastavro==1.9.7 requests==2.32.4
 
 # --- Spark defaults ----------------------------------------------------------
 # Nessie catalog, S3A mirror, OpenLineage listener, SQL extensions.
