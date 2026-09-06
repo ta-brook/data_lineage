@@ -152,18 +152,23 @@ services:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-webserver
+    command: airflow api-server
     ports:
       - "8080:8080"
     environment: &airflow-env
       AIRFLOW__CORE__EXECUTOR: LocalExecutor # Spark does the compute; no Celery needed
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager # Airflow 3: FAB auth so the entrypoint's _AIRFLOW_WWW_USER_* admin creation runs
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-db:5432/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
-      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
-      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
-      # Initial admin user for the official apache/airflow image (D2): the image
-      # entrypoint creates the admin from _AIRFLOW_WWW_USER_* (NOT AIRFLOW_USERNAME/
-      # AIRFLOW_PASSWORD, which the image ignores). Defaults admin/admin.
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__API__EXPOSE_CONFIG: "true"
+      # Airflow 3: db migrate is explicit (no auto-migrate like 2.x) - run it on
+      # the api-server so the webserver starts with a migrated metadata DB.
+      _AIRFLOW_DB_MIGRATE: "true"
+      # Initial admin user (Airflow 3; D2): the official image entrypoint creates
+      # the FAB admin from _AIRFLOW_WWW_USER_* when _AIRFLOW_WWW_USER_CREATE is set.
+      _AIRFLOW_WWW_USER_CREATE: "true"
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USERNAME:-admin}
       _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
@@ -178,7 +183,7 @@ services:
       airflow-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz >/dev/null 2>&1"]
       interval: 15s
       timeout: 10s
       retries: 30
@@ -190,6 +195,7 @@ services:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-scheduler
+    command: airflow scheduler
     environment: *airflow-env
     volumes:
       - ./dags:/opt/airflow/dags

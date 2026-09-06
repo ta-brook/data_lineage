@@ -29,7 +29,7 @@ repo root.
 | 3 | `schema-registry` | `confluentinc/cp-schema-registry:7.9.0` | Avro schema registry; subjects `{topic}-key/-value` feed the lineage schema facet | 8081 | 8081 | — | `SCHEMA_REGISTRY_HOST_NAME=schema-registry`, `SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081`, `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092` |
 | 4 | `connect` | `data-lineage-poc/connect:3.6.2.Final` (build `Dockerfile.connect`) | Debezium MySQL source connectors (`shop-orders`, `shop-customers`); emits OpenLineage to Marquez | 8083 | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, `GROUP_ID=1`, storage topics, Avro converters, registry URL; `openlineage.integration.*` + SMT in connector config (spec 03) |
 | 5 | `airflow-db` | `postgres:16` | Airflow metadata database | — | 5432 | `airflow-db-data:/var/lib/postgresql/data` | `POSTGRES_USER=airflow`, `POSTGRES_PASSWORD` (default `airflow`), `POSTGRES_DB=airflow` |
-| 6 | `airflow-webserver` | `data-lineage-poc/airflow:3.2.2` (build `Dockerfile.airflow`) | Airflow UI + REST; submits Spark apps (spark-submit client only) | 8080 | 8080 | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | `AIRFLOW__CORE__EXECUTOR=LocalExecutor`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077`, `AIRFLOW__OPENLINEAGE__TRANSPORT` |
+| 6 | `airflow-webserver` | `data-lineage-poc/airflow:3.2.2` (build `Dockerfile.airflow`) | Airflow UI + REST (runs `airflow api-server`, Airflow 3 replacement for `webserver`); submits Spark apps (spark-submit client only) | 8080 | 8080 | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | `AIRFLOW__CORE__EXECUTOR=LocalExecutor`, `AIRFLOW__CORE__AUTH_MANAGER=FabAuthManager`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__API__SECRET_KEY`, `_AIRFLOW_DB_MIGRATE`, `AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077`, `AIRFLOW__OPENLINEAGE__TRANSPORT` |
 | 7 | `airflow-scheduler` | `data-lineage-poc/airflow:3.2.2` (build `Dockerfile.airflow`) | DAG parsing + task scheduling | — | — | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | same as webserver (compose anchor `*airflow-env`) |
 | 8 | `spark-master` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | Spark cluster master | 8082 | 8080 (web UI), 7077 (RPC — no host port) | `./spark-apps:/opt/spark-apps` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`; Nessie/MinIO config baked into `spark-defaults.conf` |
 | 9 | `spark-worker` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | Spark worker; runs driver + executors (deploy-mode cluster) | 8084 | 8081 (web UI) | `./spark-apps:/opt/spark-apps` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`; same baked config |
@@ -45,7 +45,10 @@ Notes:
 
 - `airflow-webserver` / `airflow-scheduler` share one image and one env block (compose
   YAML anchor). There is **no separate `airflow-init` container**; the official Airflow
-  image entrypoint runs `airflow db migrate` on first webserver/scheduler start.
+  3.x image entrypoint runs `airflow db migrate` explicitly via `_AIRFLOW_DB_MIGRATE=true`
+  (set in the shared env block) on first webserver/scheduler start, and creates the FAB
+  admin user from `_AIRFLOW_WWW_USER_*` when `_AIRFLOW_WWW_USER_CREATE=true`. The
+  webserver service runs `airflow api-server` (Airflow 3 replaced `airflow webserver`).
 - `spark-master` / `spark-worker` receive `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
   from compose. The Nessie URI, MinIO endpoint, and S3A mirror are baked into
   `spark-defaults.conf`; the MinIO credentials there are hardcoded POC values that
@@ -199,8 +202,10 @@ Cross-service wiring values. Secrets come from `.env` (template: `.env.example`)
 | airflow-* | `AIRFLOW_CONN_SPARK_DEFAULT` | `spark://spark-master:7077` | SparkSubmitOperator master |
 | airflow-* | `AIRFLOW__OPENLINEAGE__TRANSPORT` | `{"type": "http", "url": "http://marquez:5000/api/v1/lineage"}` | Marquez sink (ticket T-01); DAGs pin the same transport inline |
 | airflow-* | `AIRFLOW__OPENLINEAGE__NAMESPACE` | `airflow` | parent job namespace `airflow:{dag}.{task}` (spec 02/04) |
-| airflow-* | `AIRFLOW__CORE__FERNET_KEY` / `AIRFLOW__WEBSERVER__SECRET_KEY` | `${FERNET_KEY}` / `${AIRFLOW__WEBSERVER__SECRET_KEY}` | secrets (from `.env`) |
-| airflow-* | `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` | `${AIRFLOW_USERNAME:-admin}` / `${AIRFLOW_PASSWORD:-admin}` | UI login — the official image entrypoint creates the initial admin from `_AIRFLOW_WWW_USER_*` (D2); `AIRFLOW_USERNAME`/`AIRFLOW_PASSWORD` are the `.env` inputs |
+| airflow-* | `AIRFLOW__CORE__FERNET_KEY` / `AIRFLOW__API__SECRET_KEY` | `${FERNET_KEY}` / `${AIRFLOW__WEBSERVER__SECRET_KEY}` | secrets (from `.env`); Airflow 3 moved the webserver secret to the `[api]` section |
+| airflow-* | `_AIRFLOW_DB_MIGRATE` | `true` | Airflow 3: entrypoint runs `airflow db migrate` on start |
+| airflow-* | `AIRFLOW__CORE__AUTH_MANAGER` | `airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager` | Airflow 3: FAB auth so `_AIRFLOW_WWW_USER_*` admin creation runs |
+| airflow-* | `_AIRFLOW_WWW_USER_CREATE` / `_AIRFLOW_WWW_USER_USERNAME` / `_AIRFLOW_WWW_USER_PASSWORD` | `true` / `${AIRFLOW_USERNAME:-admin}` / `${AIRFLOW_PASSWORD:-admin}` | UI login — the official image entrypoint creates the initial FAB admin from `_AIRFLOW_WWW_USER_*` (D2); `AIRFLOW_USERNAME`/`AIRFLOW_PASSWORD` are the `.env` inputs |
 | nessie | `NESSIE_VERSION_STORE_TYPE` | `ROCKSDB` | catalog metadata persisted to the named volume |
 | nessie | `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH` | `/data/nessie` | RocksDB data directory |
 | minio | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `${MINIO_ROOT_USER:-pocadmin}` / `${MINIO_ROOT_PASSWORD}` | S3 credentials (secret) |

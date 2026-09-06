@@ -132,8 +132,8 @@ register_connector() {
     -d "$payload" \
     "$CONNECT_URL/connectors")
   echo "POST /connectors ($name) -> HTTP $code"
-  if [ "$code" = "201" ]; then
-    echo "Connector $name registered"
+  if [ "$code" = "201" ] || [ "$code" = "409" ]; then
+    echo "Connector $name registered (or already present: HTTP $code)"
     return 0
   fi
   echo "ERROR: connector $name was not accepted (HTTP $code)" >&2

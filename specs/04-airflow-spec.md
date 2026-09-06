@@ -98,8 +98,10 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
 | `spark-master` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | 8082→8080 | `./spark-apps:/opt/spark-apps` | MINIO_ROOT_USER / MINIO_ROOT_PASSWORD (compose env); Nessie URI + MinIO endpoint baked into spark-defaults.conf |
 | `spark-worker` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | 8084→8081 | `./spark-apps:/opt/spark-apps` | same |
 
-Note: there is no `airflow-init` service in compose — the official Airflow image
-entrypoint runs `airflow db migrate` on first webserver/scheduler start.
+Note: there is no `airflow-init` service in compose — the official Airflow 3.x image
+entrypoint runs `airflow db migrate` explicitly via `_AIRFLOW_DB_MIGRATE=true` on first
+webserver/scheduler start, and the webserver service runs `airflow api-server` (Airflow 3
+replaced the `airflow webserver` command; the UI is served by the API server on :8080).
 
 ### How it connects to neighbors
 
@@ -118,7 +120,8 @@ entrypoint runs `airflow db migrate` on first webserver/scheduler start.
 
 ### Provisioning (init step)
 
-- DB migration runs via the official Airflow image entrypoint (`airflow db migrate`)
+- DB migration runs via the official Airflow 3.x image entrypoint (`_AIRFLOW_DB_MIGRATE=true`
+  -> `airflow db migrate`)
   on first webserver/scheduler start — no separate init container. The `spark_default`
   connection is created from the `AIRFLOW_CONN_SPARK_DEFAULT` env var
   (`spark://spark-master:7077`).
