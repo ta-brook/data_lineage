@@ -7,3 +7,4 @@ transport:
   type: http
   url: http://marquez:5000
   endpoint: /api/v1/lineage
+  timeoutInMillis: 20000

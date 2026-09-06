@@ -2,7 +2,7 @@
 # Custom Debezium Connect image for the POC: adds the native OpenLineage
 # integration (spec 03, sec 6) on top of the pinned Debezium 3.6.2.Final image.
 
-FROM debezium/connect:3.6.2.Final
+FROM quay.io/debezium/connect:3.6.2.Final
 
 # --- OpenLineage core libs -------------------------------------------------
 # The native OpenLineage integration needs the bundled JARs (openlineage-java
@@ -13,7 +13,41 @@ ARG OL_CORE_URL=https://repo1.maven.org/maven2/io/debezium/debezium-openlineage-
 RUN curl -fsSL -o /tmp/debezium-openlineage-core-libs.tar.gz "$OL_CORE_URL" \
     && mkdir -p /kafka/connect/debezium-openlineage-core \
     && tar -xzf /tmp/debezium-openlineage-core-libs.tar.gz -C /kafka/connect/debezium-openlineage-core --strip-components=1 \
-    && rm -f /tmp/debezium-openlineage-core-libs.tar.gz
+    && rm -f /tmp/debezium-openlineage-core-libs.tar.gz \
+    && cp /kafka/connect/debezium-openlineage-core/*.jar /kafka/connect/debezium-connector-mysql/
+
+# --- Confluent Avro converter -----------------------------------------------
+# The Debezium Connect image ships Apicurio Avro libs, NOT the Confluent
+# converter (io.confluent.connect.avro.AvroConverter) that the connectors and
+# compose file configure for Confluent Schema Registry serialization (spec 03).
+# Download the CP 7.9.x artifacts (matching cp-schema-registry:7.9.0) into a
+# plugin dir so the worker can load the converter + its schema-registry client.
+ARG CP_VERSION=7.9.0
+ARG AVRO_VERSION=1.12.1
+ARG CONFLUENT_BASE=https://packages.confluent.io/maven/io/confluent
+RUN mkdir -p /kafka/connect/kafka-connect-avro \
+    && for a in \
+         kafka-connect-avro-converter \
+         kafka-avro-serializer \
+         kafka-schema-serializer \
+         kafka-schema-registry-client \
+         kafka-schema-converter \
+         kafka-connect-avro-data \
+         common-config \
+         common-utils; do \
+         curl -fsSL -o "/kafka/connect/kafka-connect-avro/${a}-${CP_VERSION}.jar" \
+           "${CONFLUENT_BASE}/${a}/${CP_VERSION}/${a}-${CP_VERSION}.jar" || exit 1; \
+       done \
+    && curl -fsSL -o /kafka/connect/kafka-connect-avro/avro-${AVRO_VERSION}.jar \
+         https://repo1.maven.org/maven2/org/apache/avro/avro/${AVRO_VERSION}/avro-${AVRO_VERSION}.jar \
+    && curl -fsSL -o /kafka/connect/kafka-connect-avro/guava-33.4.0-jre.jar \
+         https://repo1.maven.org/maven2/com/google/guava/guava/33.4.0-jre/guava-33.4.0-jre.jar \
+    && curl -fsSL -o /kafka/connect/kafka-connect-avro/failureaccess-1.0.1.jar \
+         https://repo1.maven.org/maven2/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.jar \
+    && curl -fsSL -o /kafka/connect/kafka-connect-avro/commons-lang3-3.17.0.jar \
+         https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.17.0/commons-lang3-3.17.0.jar \
+    && curl -fsSL -o /kafka/connect/kafka-connect-avro/swagger-annotations-2.2.22.jar \
+         https://repo1.maven.org/maven2/io/swagger/core/v3/swagger-annotations/2.2.22/swagger-annotations-2.2.22.jar
 
 # --- OpenLineage client config ---------------------------------------------
 # HTTP transport to Marquez (the POC's OpenLineage backend). Referenced by the

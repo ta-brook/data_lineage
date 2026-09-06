@@ -1,0 +1,199 @@
+# Data Lineage POC — CDC-only compose (hop 1+2 proof)
+# Pipeline: MySQL -> Debezium Connect -> Kafka -> Marquez
+#
+# Slimmed-down stack to prove the CDC hop WITHOUT Airflow/Spark/Nessie/MinIO.
+# Services: mysql, kafka, schema-registry, connect, marquez-db, marquez,
+# marquez-web, provision (one-shot gate that registers the connectors).
+#
+# Project name matches the full stack (`data-lineage-poc`, the lineage
+# deployment facet instance_id) so volumes and the Marquez lineage store are
+# consistent if the full stack is brought up later.
+
+name: data-lineage-poc
+
+networks:
+  lineage-poc:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  kafka-data:
+  marquez-db-data:
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    ports:
+      - "13306:3306" # host remap avoids local MySQL collisions
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: shop
+      MYSQL_USER: ${MYSQL_USER:-poc}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./provisioning/init-mysql.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./provisioning/cdc.cnf:/etc/mysql/conf.d/cdc.cnf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [lineage-poc]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.9.0 # KRaft: combined broker + controller, no ZooKeeper
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      CLUSTER_ID: ${CLUSTER_ID} # fixed UUID; image auto-formats the KRaft log dir
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false" # Debezium topic.creation controls topics
+      KAFKA_LOG_RETENTION_HOURS: 168 # 7d retention (spec 03)
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    networks: [lineage-poc]
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.9.0
+    container_name: schema-registry
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [lineage-poc]
+
+  connect:
+    image: data-lineage-poc/connect:3.6.2.Final
+    build:
+      context: .
+      dockerfile: Dockerfile.connect
+    container_name: connect
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect-configs
+      OFFSET_STORAGE_TOPIC: connect-offsets
+      STATUS_STORAGE_TOPIC: connect-status
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      marquez:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [lineage-poc]
+
+  # OpenLineage backend: Marquez (API + UI) on postgres:14
+  marquez-db:
+    image: postgres:14
+    container_name: marquez-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: marquez
+    volumes:
+      - marquez-db-data:/var/lib/postgresql/data
+      - ./provisioning/init-marquez.sql:/docker-entrypoint-initdb.d/01-marquez.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [lineage-poc]
+
+  marquez:
+    image: marquezproject/marquez:0.50.0
+    container_name: marquez
+    ports:
+      - "5000:5000" # OpenLineage API (Debezium http transport posts here)
+      - "5001:5001" # admin interface (/healthcheck)
+    environment:
+      MARQUEZ_PORT: 5000
+      MARQUEZ_ADMIN_PORT: 5001
+      POSTGRES_HOST: marquez-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: marquez
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+    depends_on:
+      marquez-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/5001'"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+    networks: [lineage-poc]
+
+  marquez-web:
+    image: marquezproject/marquez-web:0.50.0
+    container_name: marquez-web
+    ports:
+      - "3000:3000" # Marquez UI (lineage graph)
+    environment:
+      WEB_PORT: 3000
+      MARQUEZ_HOST: marquez
+      MARQUEZ_PORT: 5000
+    depends_on:
+      marquez:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/healthcheck >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+    networks: [lineage-poc]
+
+  # One-shot provisioning gate: registers connectors shop-orders / shop-customers
+  provision:
+    image: curlimages/curl:8.10.1
+    container_name: provision
+    entrypoint: ["/bin/sh", "/provisioning/register-connectors.sh"]
+    volumes:
+      - ./provisioning/register-connectors.sh:/provisioning/register-connectors.sh:ro
+    depends_on:
+      connect:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    networks: [lineage-poc]

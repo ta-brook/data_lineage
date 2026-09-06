@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Lineage POC — Testing / Bring-up Runbook</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a2e;
+    --muted: #555555;
+    --accent: #1f4e79;
+    --accent2: #2e75b6;
+    --border: #d0d7de;
+    --code-bg: #f2f4f7;
+    --pre-bg: #f6f8fa;
+    --th-bg: #eef2f7;
+    --zebra: #f9fafb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h1 {
+    font-size: 1.9rem;
+    line-height: 1.25;
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 0.4rem;
+    margin: 0 0 1.2rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+    margin: 2.4rem 0 0.9rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+    color: var(--accent2);
+    margin: 1.8rem 0 0.6rem;
+  }
+  p { margin: 0.6rem 0; }
+  ul, ol { padding-left: 1.6rem; margin: 0.6rem 0; }
+  li { margin: 0.35rem 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.9rem;
+    background: var(--pre-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    line-height: 1.5;
+    margin: 0.7rem 0;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.95rem; }
+  th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+  th { background: var(--th-bg); font-weight: 650; }
+  tbody tr:nth-child(even) { background: var(--zebra); }
+  .note {
+    background: #fff8e6;
+    border: 1px solid #e0c568;
+    border-left: 4px solid #d4a72c;
+    border-radius: 4px;
+    padding: 0.7rem 1rem;
+    margin: 1rem 0;
+  }
+  .step {
+    background: var(--pre-bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.5rem 1rem;
+    margin: 1rem 0;
+    font-weight: 650;
+    color: var(--accent);
+  }
+  .expect {
+    background: #eef7ee;
+    border: 1px solid #b9d6b9;
+    border-left: 4px solid #4c9a4c;
+    border-radius: 4px;
+    padding: 0.7rem 1rem;
+    margin: 0.7rem 0;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 650;
+    color: #fff;
+    background: var(--accent2);
+    border-radius: 10px;
+    padding: 0.1rem 0.6rem;
+    vertical-align: middle;
+    margin-left: 0.4rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>Data Lineage POC — Testing / Bring-up Runbook</h1>
+<p>Hands-on guide to bring up the stack and validate the <strong>CDC hop</strong>
+(<code>MySQL &rarr; Debezium &rarr; Kafka &rarr; Marquez</code>). This is the execution phase
+(tickets <strong>EXE-01</strong> and <strong>CDC-01</strong>). The full stack is already authored
+in <code>docker-compose.yml</code>; your job is to run it and verify it works.</p>
+
+<p>Run every command from the repo root:
+<code>C:\Users\user\Documents\github\data_lineage</code></p>
+
+<h2>Prerequisites (already set up)</h2>
+<ul>
+  <li><strong>Docker Desktop</strong> is installed and the engine is running.</li>
+  <li><strong><code>.env</code></strong> has been created with all required values
+      (MySQL / Kafka / Airflow / MinIO credentials, plus a generated Fernet key).</li>
+  <li>All required host ports are free (no conflicts).</li>
+</ul>
+
+<h2>Phase 1 — Bring-up</h2>
+
+<div class="step">Step 1 &mdash; Build and start the stack</div>
+<p>Builds the 3 custom images (<code>airflow</code>, <code>spark</code>, <code>connect</code>)
+and starts all 16 containers. The first run takes several minutes.</p>
+<pre><code>docker compose up -d --build</code></pre>
+
+<div class="step">Step 2 &mdash; Check that all services are healthy</div>
+<pre><code>docker compose ps</code></pre>
+<div class="expect">Expect: 14 services <strong>healthy</strong>, and the two one-shot gates
+(<code>mc</code>, <code>provision</code>) as <strong>exited (0)</strong>.</div>
+
+<h2>Phase 2 — CDC validation</h2>
+
+<div class="step">Step 3 &mdash; Confirm connectors are registered and RUNNING</div>
+<pre><code>curl http://localhost:8083/connectors
+curl http://localhost:8083/connectors/shop-orders/status</code></pre>
+<div class="expect">Expect: <code>["shop-orders","shop-customers"]</code> and
+<code>"state": "RUNNING"</code> for the connector.</div>
+
+<div class="step">Step 4 &mdash; Confirm the CDC topics exist</div>
+<pre><code>docker compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list</code></pre>
+<div class="expect">Expect topics: <code>mysql.shop.orders</code>,
+<code>mysql.shop.customers</code>, <code>mysql-schema-history</code>, <code>connect-*</code>.</div>
+
+<div class="step">Step 5 &mdash; Prove data is captured (MySQL &rarr; Kafka)</div>
+<p>Insert a row into MySQL, then read it back from the Kafka topic.</p>
+<pre><code>docker compose exec mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" shop -e "INSERT INTO orders (customer_id, product_id, quantity, unit_price, status) VALUES (1, 42, 2, 9.99, \"NEW\");"'</code></pre>
+<pre><code>docker compose exec kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic mysql.shop.orders --from-beginning --max-messages 1 --timeout-ms 15000</code></pre>
+<div class="expect">Expect: the new row as a CDC event (snapshot + binlog change).</div>
+
+<div class="step">Step 6 &mdash; Prove lineage is visible in Marquez</div>
+<p>Open the UI, search the topic, and inspect the lineage graph and raw events.</p>
+<ul>
+  <li>UI: <strong>http://localhost:3000</strong> &rarr; search <code>mysql.shop.orders</code>
+      (or job <code>mysql.0</code>).</li>
+</ul>
+<div class="expect">Expect the lineage chain:
+<pre style="border:none;background:transparent;padding:0;margin:0.3rem 0;"><code>mysql://mysql:3306/shop.orders
+  &rarr; debezium.shop-orders:mysql.0
+  &rarr; kafka://kafka:9092/mysql.shop.orders</code></pre>
+Run state <strong>RUNNING</strong>; the MySQL input dataset shows flat source columns, and the
+Kafka output dataset shows the CDC envelope (columns nested under <code>after</code>).</div>
+<p>Raw events via the API:</p>
+<pre><code>curl -s "http://localhost:5000/api/v1/events/lineage?limit=5"</code></pre>
+<div class="expect">Expect: JSON events with <code>eventType</code> START/RUNNING and job
+<code>debezium.shop-orders:mysql.0</code>.</div>
+
+<h2>Optional — later-phase checks (not part of CDC validation)</h2>
+
+<div class="step">Optional &mdash; Nessie catalog</div>
+<pre><code>curl http://localhost:19120/api/v2/trees/main</code></pre>
+<div class="expect">Expect: default branch <code>main</code>, namespace <code>poc</code>, table
+<code>poc.shop_orders</code>.</div>
+
+<div class="step">Optional &mdash; MinIO warehouse</div>
+<p>Console: <strong>http://localhost:9002</strong> (login <code>pocadmin</code> /
+<code>minio-poc-secret</code>).</p>
+<div class="expect">Expect: bucket <code>poc-warehouse</code> with parquet under
+<code>poc/shop_orders/</code>.</div>
+
+<h2>Known risks to watch for</h2>
+<p>Stop and ask for help if you hit any of these:</p>
+<ul>
+  <li><code>mc</code> or <code>provision</code> do not exit with code 0.</li>
+  <li>Marquez or Nessie never reach <strong>healthy</strong> &mdash; their healthchecks use
+      <code>bash /dev/tcp</code>; if the images lack <code>bash</code> they will stay unhealthy.</li>
+  <li>Connectors registered but not <code>RUNNING</code>.</li>
+  <li>Any port / env / build error.</li>
+</ul>
+
+<div class="note"><strong>Next phase (not in this runbook):</strong> the Airflow &rarr; Spark &rarr;
+Iceberg hop validation (runbook steps 8&ndash;10 in
+<code>specs/07-deployment-docker.md</code>): trigger the <code>load_orders</code> /
+<code>load_customers</code> DAGs and verify the full lineage chain, columnLineage facet,
+kafkaOffset facet, and snapshot id.</div>
+
+</body>
+</html>
