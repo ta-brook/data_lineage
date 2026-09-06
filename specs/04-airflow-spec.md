@@ -93,8 +93,8 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
 | Compose service | Image | Host ports | Volumes | Key env vars |
 |---|---|---|---|---|
 | `airflow-db` | `postgres:16` | — | `airflow-db-data` | `POSTGRES_DB=airflow` |
-| `airflow-scheduler` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | — | `./dags`, `./spark-apps:/opt/spark-apps` | executor, OpenLineage transport (HTTP → Marquez), `AIRFLOW_CONN_SPARK_DEFAULT` |
-| `airflow-webserver` | `data-lineage-poc/airflow:2.11.0` (build `Dockerfile.airflow`) | 8080 | `./dags`, `./spark-apps:/opt/spark-apps` | same |
+| `airflow-scheduler` | `data-lineage-poc/airflow:3.2.2` (build `Dockerfile.airflow`) | — | `./dags`, `./spark-apps:/opt/spark-apps` | executor, OpenLineage transport (HTTP → Marquez), `AIRFLOW_CONN_SPARK_DEFAULT` |
+| `airflow-webserver` | `data-lineage-poc/airflow:3.2.2` (build `Dockerfile.airflow`) | 8080 | `./dags`, `./spark-apps:/opt/spark-apps` | same |
 | `spark-master` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | 8082→8080 | `./spark-apps:/opt/spark-apps` | MINIO_ROOT_USER / MINIO_ROOT_PASSWORD (compose env); Nessie URI + MinIO endpoint baked into spark-defaults.conf |
 | `spark-worker` | `data-lineage-poc/spark:3.5.0` (build `Dockerfile.spark`) | 8084→8081 | `./spark-apps:/opt/spark-apps` | same |
 

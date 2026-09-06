@@ -181,7 +181,7 @@ Git history: one commit per task per agent (see `git log --oneline`).
 | Debezium Connect | `data-lineage-poc/connect:3.6.2.Final` (custom, `Dockerfile.connect`; base `debezium/connect:3.6.2.Final`) |
 | Debezium OpenLineage core | `debezium-openlineage-core:3.6.2.Final` (libs archive, baked into the image) |
 | Marquez API / Web | `marquezproject/marquez:0.50.0` / `marquezproject/marquez-web:0.50.0` (Postgres 14 backend) |
-| Airflow | `apache/airflow:2.11.0` (custom image `data-lineage-poc/airflow:2.11.0`) |
+| Airflow | `apache/airflow:3.2.2` (custom image `data-lineage-poc/airflow:3.2.2`) |
 | Airflow providers (pinned D4) | `apache-airflow-providers-apache-spark==6.3.2`, `apache-airflow-providers-openlineage==2.20.1`, `pyiceberg[nessie,pyarrow,s3fs]==0.11.1` (Dockerfile.airflow) |
 | Postgres (Airflow / Marquez) | `postgres:16` / `postgres:14` |
 | Spark | `apache/spark:3.5.0` (custom image `data-lineage-poc/spark:3.5.0`) |

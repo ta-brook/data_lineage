@@ -147,7 +147,7 @@ services:
     networks: [lineage-poc]
 
   airflow-webserver:
-    image: data-lineage-poc/airflow:2.11.0
+    image: data-lineage-poc/airflow:3.2.2
     build:
       context: .
       dockerfile: Dockerfile.airflow
@@ -185,7 +185,7 @@ services:
     networks: [lineage-poc]
 
   airflow-scheduler:
-    image: data-lineage-poc/airflow:2.11.0
+    image: data-lineage-poc/airflow:3.2.2
     build:
       context: .
       dockerfile: Dockerfile.airflow

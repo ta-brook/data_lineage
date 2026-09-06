@@ -13,14 +13,15 @@
 # - confluent-kafka is intentionally NOT installed: Airflow never talks to Kafka;
 #   only the Spark app (running on the worker) consumes topics.
 
-FROM apache/airflow:2.11.0
+FROM apache/airflow:3.2.2
 
-USER root
-# Versions pinned (D4): providers + pyiceberg must match the Airflow 2.11.0 base
+# Versions pinned (D4): providers + pyiceberg must match the Airflow 3.2.2 base
 # and the openlineage-spark 1.52.0 listener (spec 06 version-drift risk).
+# Note: the apache/airflow image ships a pip wrapper that rejects `pip install`
+# as root ("Please use 'airflow' user to run pip!"). Run as the default
+# `airflow` user; the image's site-packages are writable by that user.
 RUN pip install --no-cache-dir \
         apache-airflow-providers-apache-spark==6.3.2 \
         apache-airflow-providers-openlineage==2.20.1 \
         "pyiceberg[nessie,pyarrow,s3fs]==0.11.1" \
         pyspark==3.5.0
-USER airflow

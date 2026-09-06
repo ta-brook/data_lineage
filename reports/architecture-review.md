@@ -100,7 +100,7 @@ Top blockers:
 | Drift | spec 06 §Risks lists the collision set as "8080/8081/8083/9000/9001" — missing the final 8082/8084/9002/13306/19120 remaps. Stale risk table. |
 | Risky | `.env.example` ships `FERNET_KEY=` empty; the runbook (spec 07 §7) says to fill it — fine, but a bare `cp .env.example .env` boot fails. |
 | Risky | `provision` gates on connect+kafka healthy but **not** mysql healthy; connectors register before MySQL is reachable and self-heal. Acceptable, but connector status may flap during startup. |
-| Note | All pinned images/jars are **real and current** (verified against Maven Central/registries, 2026 dates): airflow 2.11.0, nessie 0.108.4 + ext 0.108.4, iceberg 1.11.0, openlineage 1.52.0, cp-kafka/sr 7.9.0, debezium 3.6.0, postgres 16, spark 3.5.0, minio RELEASE.2025-09-07. The one registry caveat is Debezium's move to quay.io (1.2). |
+| Note | All pinned images/jars are **real and current** (verified against Maven Central/registries, 2026 dates): airflow 3.2.2, nessie 0.108.4 + ext 0.108.4, iceberg 1.11.0, openlineage 1.52.0, cp-kafka/sr 7.9.0, debezium 3.6.0, postgres 16, spark 3.5.0, minio RELEASE.2025-09-07. The one registry caveat is Debezium's move to quay.io (1.2). |
 | Recommendation | Update STATE.md (T-statuses + port 8084) and spec 06's collision set; add `MINIO_*`/S3 endpoint env to Airflow; note in the runbook that `.env` must fill FERNET_KEY before boot. |
 
 ---
