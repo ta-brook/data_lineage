@@ -12,6 +12,7 @@ Conventions:
 | ID | Title | Agent label(s) | Phase | Priority | Status | GitHub |
 |---|---|---|---|---|---|---|
 | EXE-01 | Bring up the docker-compose stack and run the spec 07 validation runbook | agent:poc-orchestrator | execution | high | open | [#1](https://github.com/ta-brook/data_lineage/issues/1) |
+| EXE-02 | Resolve PySpark driver/executor Python version mismatch (blocker for EXE-01 runbook steps 10/10b) | agent:poc-orchestrator, agent:iceberg-expert | execution | high | open | [#11](https://github.com/ta-brook/data_lineage/issues/11) |
 | CDC-01 | Validate CDC hop lineage end-to-end (MySQL → Debezium → Kafka → Marquez) | agent:debezium-expert | cdc | high | open | [#2](https://github.com/ta-brook/data_lineage/issues/2) |
 | T-01 | Switch Airflow + Spark OpenLineage transports from console to Marquez | agent:airflow-expert, agent:iceberg-expert | orchestration | medium | closed | [#3](https://github.com/ta-brook/data_lineage/issues/3) |
 | T-02 | Align Airflow Kafka dataset namespace to `kafka://kafka:9092` | agent:airflow-expert | orchestration | medium | closed | [#4](https://github.com/ta-brook/data_lineage/issues/4) |

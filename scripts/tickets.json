@@ -92,8 +92,8 @@
                     },
                     {
                         "id":  "T-04",
-                        "title":  "Downgrade spec 04 §3 snapshot-id wording to \u0027records in Airflow run metadata\u0027 (OQ13)",
-                        "body":  "Downgrade the spec 04 §3 wording that \u0027attaches it as the output version marker\u0027 to \u0027records in Airflow run metadata\u0027 — the snapshot id is recorded in Airflow run metadata, not attached as an output version marker (OQ13). Update spec 04.\n\nOwner: airflow-expert. Ref: specs/06 OQ13, specs/04.",
+                        "title":  "Downgrade spec 04 Â§3 snapshot-id wording to \u0027records in Airflow run metadata\u0027 (OQ13)",
+                        "body":  "Downgrade the spec 04 Â§3 wording that \u0027attaches it as the output version marker\u0027 to \u0027records in Airflow run metadata\u0027 â€” the snapshot id is recorded in Airflow run metadata, not attached as an output version marker (OQ13). Update spec 04.\n\nOwner: airflow-expert. Ref: specs/06 OQ13, specs/04.",
                         "labels":  [
                                        "agent:airflow-expert",
                                        "phase:orchestration",
@@ -130,6 +130,19 @@
                                    ],
                         "status":  "closed",
                         "github_number":  10
+                    },
+                    {
+                        "id":  "EXE-02",
+                        "title":  "Resolve PySpark driver/executor Python version mismatch (blocker for EXE-01 runbook steps 10/10b)",
+                        "body":  "BLOCKER for the Airflow-\u003eSpark hop. In client deploy-mode the PySpark driver runs in the Airflow 3.2.2 container (Python 3.13) but the Spark workers run Python 3.8 (apache/spark:3.5.0 base = Ubuntu 20.04/focal). PySpark requires driver and executor Python minor versions to match; the load_orders/load_customers DAGs fail at the Spark write/commit step with: [PYTHON_VERSION_MISMATCH] Python in worker has different version (3, 8) than that in driver 3.13.\n\nResolution (agreed): align BOTH sides to Python 3.11.\n- Airflow image (Debian bookworm): apt-get install python3.11 + python3.11 -m pip install fastavro==1.12.2 requests==2.32.4 (verified Python 3.11.2 available).\n- Spark image (Ubuntu focal): deadsnakes PPA has NO python3.11/3.13 for focal (tried). Must build 3.11 from source, use a standalone/prebuilt Python, OR switch the Spark base OS to jammy/noble. If base OS changes, update spec 07 / STATE.md pins.\n- Set spark.pyspark.python=/usr/bin/python3.11 (+ driver.python) in dags/config.py SPARK_CONF and spark-defaults.conf.\n- Rebuild Spark image from local ctx (C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\spark-ctx), restart spark-master/spark-worker, then trigger both DAGs and verify the full lineage chain in Marquez (:3000): debezium.shop-orders:mysql.0 -\u003e kafka://kafka:9092/mysql.shop.orders -\u003e airflow:load_orders.spark_load_orders -\u003e spark:load_orders, incl. columnLineage facet, kafkaOffset facet, and capture_snapshot snapshot id.\n\nNOTE: Dockerfile.spark currently has a BROKEN deadsnakes Python-3.13 block (lines ~20-30) that must be replaced before the image builds.\n\nRef: STATE.md sec 7 (session 0edf23d3).\nOwner: poc-orchestrator (+ iceberg-expert for the Spark image change). Phase: execution.",
+                        "labels":  [
+                                       "agent:poc-orchestrator",
+                                       "agent:iceberg-expert",
+                                       "phase:execution",
+                                       "priority:high"
+                                   ],
+                        "status":  "open",
+                        "github_number":  11
                     }
                 ]
 }

@@ -198,9 +198,10 @@ Make driver and executors both use Python 3.11:
 
 ---
 
-## 8. Ticket board (unchanged)
+## 8. Ticket board
 
 - EXE-01 (#1, open) — bring up + run spec 07 runbook (in progress, mostly done)
+- EXE-02 (#11, open) - resolve PySpark driver/executor Python version mismatch (the one blocker; see Section 7)
 - CDC-01 (#2, open) — CDC hop lineage validation (DONE in this session, not yet closed)
 - T-01..CLN-02 (#3-#10, closed)
 
