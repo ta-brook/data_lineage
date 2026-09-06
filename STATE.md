@@ -1,6 +1,6 @@
 # POC State File — Resume Point
 
-**Last saved:** 2026-09-05 (session: CLN-02 landed — final runbook reconciliation: G3 envelope wording + load_customers coverage; all authoring complete, execution pending)
+**Last saved:** 2026-09-06 (session ID: `0edf23d3-7364-4fdf-887f-816dd363402b`) — EXECUTION PHASE in progress. Full stack up (15 healthy); CDC hop proven; Airflow 3.2.2 migration landed; ONE blocker remains: PySpark driver/executor Python version mismatch (Airflow driver 3.13 vs Spark worker 3.8) that stops the Airflow→Spark DAG from completing.
 **Working dir:** `C:\Users\user\Documents\github\data_lineage`
 
 This file records exactly what is done and what remains. On resume, read this file first,
@@ -10,235 +10,199 @@ then execute the remaining todos in order. Do NOT redo completed steps.
 this file, (3) commit one commit per task per agent, (4) push to origin. This workflow
 is codified in the `session-workflow` skill (`.opencode/skills/session-workflow/SKILL.md`).
 
+**HOW TO RESUME (next session):** read this file, then jump straight to **Section 7
+(RESUME HERE — THE ONE BLOCKER)**. Everything in Sections 1–6 is DONE and verified.
+Do NOT re-run the completed bring-up. Only resolve the Python-version blocker, then
+finish the runbook (trigger both DAGs and verify the lineage chain in Marquez).
+
 ---
 
 ## 0. Project status at a glance
 
-**Overall status: design phase complete — ready for execution.**
+**Overall status: EXECUTION PHASE — stack is up and mostly working; 1 blocker remains.**
 
 The full pipeline `MySQL → Debezium → Kafka → Airflow → Spark → Iceberg (Nessie + MinIO)`
-is **authored and committed** (16 docker-compose services), but the stack has **not been
-executed or tested** yet.
+is brought up as a 16-service docker-compose stack. 15 services are healthy. The CDC hop
+is fully proven end-to-end (data flows + lineage in Marquez). The Airflow hop has been
+migrated to Airflow 3.2.2 and the Spark apps run, but the final data-load DAG does not
+complete because of a PySpark Python-version mismatch between the client-mode driver
+(Airflow container, Python 3.13) and the Spark executors (worker image, Python 3.8).
 
-### What's done (all design work)
+### What's DONE and verified (this session)
 
 | Area | Status |
 |---|---|
-| Specs 00–07 | Complete; all 13 open questions (OQ1–OQ13) resolved |
-| Docker-compose topology (16 services) | Authored, ports/env/healthchecks pinned |
-| DAGs + Spark apps | Authored (`load_orders`, `load_customers`; confluent_from_avro UDF, MERGE upsert, `capture_snapshot`) |
-| Lineage wiring | **All three hops emit OpenLineage to Marquez** (Debezium CDC native OL, Airflow parent runs, Spark child runs) |
-| Reviews | 3 completed: architecture (fix applied), CDC hop (**ready to test**), Airflow→Spark→Iceberg hop (**ready to test**) |
-| Ticket board | 8 closed, 2 open (EXE-01, CDC-01) — synced to GitHub |
+| `.env` created (Fernet key generated) | Done |
+| **CDC hop proven end-to-end** (MySQL→Debezium→Kafka→Marquez): connectors RUNNING, topics exist, row inserted→read back, Avro schemas registered, lineage events in Marquez UI :3000 | **DONE** |
+| CDC-only compose (`docker-compose.cdc.yml`) | Done |
+| **Full 16-service stack healthy** (13 healthy + airflow services up; gates `mc`/`provision` exited) | **DONE** |
+| **Airflow 2.11 → 3.2.2 migration** (image, compose, DAGs, specs, STATE) | **DONE** |
+| Airflow 3 runtime fixes (api-server cmd, FabAuthManager, `_AIRFLOW_DB_MIGRATE`, `AIRFLOW__API__BASE_URL`+JWT secret, `/healthz`, `airflow-dag-processor` service) | **DONE** |
+| DAGs migrated to Airflow 3 (`Asset`, client deploy-mode, `SPARK_CONF`) — both import cleanly, both registered in Airflow | **DONE** |
+| Spark app runs to the write step; OpenLineage `START`/`RUNNING`/`FAIL` events emitted to Marquez from both Airflow and Spark | **DONE** |
+| Nessie catalog + MinIO `poc-warehouse` bucket verified | **DONE** |
+| Work pushed to origin (commits `940213f`…`ef108b5`) | **DONE** |
 
-### Key design decisions locked in
+### Remaining work (next session — see Section 7)
 
-- Spark = transform stage; Airflow = pure orchestration (SparkSubmitOperator, cluster mode)
-- Lineage: `airflow:{dag}.{task}` parent → `spark:{app}` child, joined via parentRun facet
-- Dataset namespaces: Kafka `kafka://kafka:9092`, Iceberg physical `nessie.poc`/`shop_orders`
-  (logical `poc.shop_orders` canonical)
-- Version markers: binlog position → Kafka offset → kafkaOffset facet → Iceberg snapshot id
-  (in Airflow run metadata)
-- Precision honesty: declarative SQL = exact; confluent_from_avro UDF = inferred
-
-### Remaining work (next phase — EXECUTION)
-
-1. **EXE-01**: `cp .env.example .env` → `docker compose up -d --build` → run the spec 07 §7
-   runbook (16 services healthy, `mc`/`provision` exit 0)
-2. **CDC-01**: insert a row in MySQL → read from topic → verify lineage in Marquez UI (:3000)
-3. Bring-up validations from the latest review (parentRun join, kafkaOffset facet,
-   healthcheck tooling, etc. — see section 3)
-4. One known script bug: `sync-tickets.ps1` aborts on `gh issue close` under strict error
-   handling (workaround documented in section 3)
+1. **BLOCKER**: resolve PySpark driver/executor Python version mismatch (Section 7).
+2. Trigger `load_orders` + `load_customers` DAGs, let them COMPLETE (currently fail at
+   the Spark write/commit due to the Python mismatch).
+3. Verify the full lineage chain in Marquez: `debezium.shop-orders:mysql.0 →
+   kafka://kafka:9092/mysql.shop.orders → airflow:load_orders.spark_load_orders →
+   spark:load_orders`, plus the columnLineage facet, kafkaOffset facet, and the
+   `capture_snapshot` snapshot id (runbook steps 10 / 10b).
+4. Close tickets EXE-01 (#1) + CDC-01 (#2) via `sync-tickets.ps1`; update STATE.md and push.
 
 ---
 
-## 1. Project status overview
+## 1. Session history (this execution session)
 
-The POC is a **runnable docker-compose stack**:
+All landed and PUSHED to origin (one commit per logical unit, matching repo style):
 
-`MySQL -> Debezium -> Kafka -> Airflow -> Spark -> Iceberg (Nessie + MinIO)`
-
-Everything is **authored and committed** (16 services). The stack has NOT been executed
-or tested — that is the next phase.
-
-Three review cycles completed:
-- Full architecture review: verdict **"fix before execution"** — fixes applied.
-- CDC hop + OpenLineage review (`reports/cdc-openlineage-review.md`): verdict
-  **"ready to test"** for MySQL → Debezium → Kafka.
-- Airflow → Spark → Iceberg hop review (`reports/airflow-spark-iceberg-review.md`):
-  verdict **"ready to test"** — all three hops now emit OpenLineage to **Marquez**
-  (UI :3000), the central lineage store.
-
-## 2. Completed (verified on disk + git history)
-
-| Item | Files | Status |
-|---|---|---|
-| Specs 00–07 | `specs/00-overview.md` … `specs/07-deployment-docker.md` | Done |
-| Agent configs (7) + workflow skill | `.opencode/agents/*.md`, `.opencode/skills/*/SKILL.md` | Done (secrets — untracked) |
-| Compose topology (16 services) | `docker-compose.yml` | Done |
-| Airflow image + DAGs | `Dockerfile.airflow`, `dags/config.py`, `dags/load_orders.py`, `dags/load_customers.py` | Done |
-| Spark image + apps | `Dockerfile.spark`, `spark-defaults.conf`, `spark-apps/load_orders.py`, `spark-apps/load_customers.py` | Done |
-| Connect image + OL wiring | `Dockerfile.connect`, `provisioning/openlineage.yml`, `register-connectors.sh` (OL props) | Done |
-| OpenLineage backend | `marquez-db`/`marquez`/`marquez-web` services, `provisioning/init-marquez.sql` | Done |
-| Provisioning | `provisioning/init-mysql.sql`, `cdc.cnf`, `register-connectors.sh`, `mc-init.sh` | Done |
-| Reports (md + html) | `reports/architecture-review.*`, `reports/architecture-diagram.*`, `reports/cdc-openlineage-review.*`, `reports/airflow-spark-iceberg-review.*` | Done |
-| README | `README.md` | Done |
-| Env template (secrets — untracked) | `.env.example` | Done |
-| **T-01: Airflow + Spark OL transports → Marquez** | `docker-compose.yml` (env anchor), `dags/*.py` (inline transport), `spark-defaults.conf` (http transport), specs 04/05/06/07 | Done |
-| **T-02: Airflow Kafka namespace → `kafka://kafka:9092`** | `dags/config.py` (`KAFKA_NAMESPACE`), `dags/*.py` inlets, spec 04 | Done |
-| **T-03: Airflow Iceberg outlets → physical `nessie.poc`** | `dags/config.py` (`OUTPUT_NAMESPACE`), `dags/*.py` outlets, specs 04/05 | Done |
-| **T-04: spec 04 §3 snapshot-id wording (OQ13)** | `specs/04-airflow-spec.md` | Done |
-| **OQ-01 + OQ12 + OQ13 resolved** | `specs/02-lineage-model.md`, `specs/06-validation-metrics.md` | Done |
-| **CLN-01: HOP-01 review drifts D2/D4/D6/D8/P1/P2/D9 + sync-tickets.ps1 fixes** | `scripts/sync-tickets.ps1`, `docker-compose.yml`, `Dockerfile.airflow`, `Dockerfile.spark`, `spark-apps/*.py`, specs 01/02/03/05/06/07, `STATE.md`, `TICKETS.md` | Done |
-| **CLN-02: final runbook reconciliation — G3 envelope wording + load_customers coverage** | `specs/07-deployment-docker.md` | Done |
-| Ticket board synced (8 closed, 2 open) | `scripts/tickets.json`, `TICKETS.md`, GitHub issues #1–#10 | Done |
-
-Git history: one commit per task per agent (see `git log --oneline`).
-
-## 3. Remaining work (next phase — EXECUTION, out of scope for design sessions)
-
-1. **Bring up the stack**: `cp .env.example .env` (fill FERNET_KEY, MINIO_ROOT_PASSWORD),
-   `docker compose up -d --build`, then run the validation runbook in
-   `specs/07-deployment-docker.md` §7 (16 services healthy; `mc`/`provision` exit 0).
-   Runbook step 10 now covers the Airflow/Spark hops: trigger `load_orders`, verify the
-   full chain in Marquez (`debezium.shop-orders:mysql.0` → `kafka://kafka:9092/mysql.shop.orders`
-   → `airflow:load_orders.spark_load_orders` → `spark:load_orders`).
-2. **CDC hop checks (ready to test)**: insert a row into MySQL (:13306) → read it back
-   from topic `mysql.shop.orders` (console consumer) → open **Marquez UI :3000**, search
-   `mysql.shop.orders`, verify lineage
-   `mysql://mysql:3306/shop.orders → debezium.shop-orders:mysql.0 → kafka://kafka:9092/mysql.shop.orders`.
-3. **Bring-up validations** (flagged by the Airflow→Spark→Iceberg review; see
-   `reports/airflow-spark-iceberg-review.md`):
-   - parentRun injection relies on the Airflow OL provider injecting
-     `spark.openlineage.parentJobName/parentRunId` — verify the parent/child join in
-     Marquez at bring-up (L3).
-   - `capture_snapshot` reads the CURRENT snapshot (fine for the daily non-overlapping
-     schedule) — confirm at bring-up (L8).
-   - `kafkaOffset` facet is a degenerate `[0, end]` range (earliest→latest re-read per
-     run) — confirm the facet appears on the Spark run (P2; accepted as a cumulative
-     re-scan, spec 06 risk row).
-   - Marquez/Nessie healthchecks assume bash (`/dev/tcp`) — fall back to TCP-only if
-     the images lack bash (R2).
-   - `confluent_from_avro` UDF (renamed from `from_avro` to avoid shadowing Spark's
-     built-in, review D8) — confirm the UDF decodes at bring-up (L8).
-   - Nessie commit-hash + writer-metadata facets (spec 05 §5) — deferred, not captured
-     in the POC (D9; spec 06 risk row).
-4. **DONE (CLN-01)**: sync-tickets.ps1 fixed — `gh issue close` no longer aborts under
-   `$ErrorActionPreference="Stop"` (native stderr suppressed via `Invoke-Gh`); `New-Issue`
-   closes issues whose manifest status is `closed`; `-Mode <mode>` documented as the
-   reliable invocation (script header, TICKETS.md).
-
-## 4. Key design decisions (do not re-litigate)
-
-- **Spark = transform stage; Airflow = pure orchestration** (SparkSubmitOperator,
-  deploy-mode cluster, spark connection `spark://spark-master:7077`).
-- **Lineage:** `airflow:{dag}.{task}` parent job → `spark:{app_name}` child job;
-  parentRunFacet correlation; Spark run is run of record for the data chain.
-- **Precision:** declarative Spark SQL = exact; opaque UDFs = inferred; absence of a
-  columnLineage facet = inferred, never exact. (confluent_from_avro UDF = inferred, OQ5 resolved.)
-- **Version markers:** binlog position → Kafka offset → kafkaOffset facet (Spark) →
-  Iceberg snapshot id (captured by pyiceberg read-back task; recorded in Airflow run
-  metadata XCom/log — NOT attached to an OL event, OQ13 resolved).
-- **CDC hop lineage = native Debezium OpenLineage** (3.6) → Marquez. Job identity
-  logical `debezium:{connector}` ↔ emitted `debezium.{connector}:{topic.prefix}.{task_id}`
-  (namespace carries the connector; job name `mysql.0` is not configurable). Dataset
-  namespaces: input `mysql://mysql:3306` / `shop.orders`, output
-  `kafka://kafka:9092` / `mysql.shop.orders` (spec 02).
-- **All three hops emit OpenLineage to Marquez** (`http://marquez:5000/api/v1/lineage`):
-  Debezium CDC (native OL), Airflow parent runs (HTTP transport, namespace `airflow`),
-  Spark child runs (openlineage-spark listener, namespace `spark`). T-01.
-- **Dataset namespaces:** Kafka `kafka://kafka:9092` (T-02); Iceberg output physical
-  `nessie.poc` / `shop_orders` (Spark catalog `nessie` + namespace `poc`, OQ12/T-03),
-  logical canonical `poc.shop_orders` (spec 02/05).
-- **Deployment facet** on every lineage event: instance_id `data-lineage-poc`,
-  environment `dev`, stack_epoch, endpoints (mysql:3306, kafka:9092, connect:8083,
-  schema-registry:8081, spark://spark-master:7077, nessie:19120/api/v2,
-  s3://poc-warehouse/, openlineage: http://marquez:5000/api/v1/lineage).
-- **Kafka serialization: Avro + Schema Registry kept**; Spark deserializes via a confluent_from_avro
-  UDF (magic byte strip + registry fetch). JSON rejected (loses schema facet provenance).
-- **Iceberg:** Nessie `type=nessie` catalog (client-side S3 config; Nessie container
-  stays S3-free, RocksDB store), warehouse `s3://poc-warehouse/`, no snapshot expiration
-  in POC.
-- **Table bootstrap inside the Spark job** (Spark SQL DDL `nessie.poc.*`), not an Airflow
-  pyiceberg task.
-- **Executor:** Airflow LocalExecutor (Spark does the compute). `apache/spark` image
-  (bitnami deprecated). Spark 3.5.x (not 4.0) for ecosystem maturity.
-- **Kafka:** KRaft (no ZooKeeper), `topic.prefix=mysql`, retention 7d, auto-create
-  topics off (Debezium topic.creation controls it).
-- **Topic convention:** `mysql.{db}.{table}` (MySQL database = schema; no schema level).
-- **MinIO creds:** hardcoded POC values in `spark-defaults.conf` (Spark does not expand
-  `${VAR}` there) — MUST match `.env.example` (`pocadmin` / `minio-poc-secret`).
-- **Reporting standard:** every report ships markdown + self-contained HTML (spec 00).
-
-## 5. Pinned versions (use these; do not invent new ones)
-
-| Component | Version |
+| Commit | What |
 |---|---|
-| MySQL | `mysql:8.0` |
-| Kafka | `confluentinc/cp-kafka:7.9.0` (KRaft, combined broker+controller) |
-| Schema Registry | `confluentinc/cp-schema-registry:7.9.0` |
-| Debezium Connect | `data-lineage-poc/connect:3.6.2.Final` (custom, `Dockerfile.connect`; base `debezium/connect:3.6.2.Final`) |
-| Debezium OpenLineage core | `debezium-openlineage-core:3.6.2.Final` (libs archive, baked into the image) |
-| Marquez API / Web | `marquezproject/marquez:0.50.0` / `marquezproject/marquez-web:0.50.0` (Postgres 14 backend) |
-| Airflow | `apache/airflow:3.2.2` (custom image `data-lineage-poc/airflow:3.2.2`) |
-| Airflow providers (pinned D4) | `apache-airflow-providers-apache-spark==6.3.2`, `apache-airflow-providers-openlineage==2.20.1`, `pyiceberg[nessie,pyarrow,s3fs]==0.11.1` (Dockerfile.airflow) |
-| Postgres (Airflow / Marquez) | `postgres:16` / `postgres:14` |
-| Spark | `apache/spark:3.5.0` (custom image `data-lineage-poc/spark:3.5.0`) |
-| Nessie | `ghcr.io/projectnessie/nessie:0.108.4` (NOT Docker Hub; no UI on 9000) |
-| MinIO | `minio/minio:RELEASE.2025-09-07T16-13-09Z` + `minio/mc:RELEASE.2025-08-13T08-35-41Z` (one-shot; pinned D4) |
-| provision | `curlimages/curl:8.10.1` (one-shot) |
-| Iceberg runtime jar | `iceberg-spark-runtime-3.5_2.12:1.11.0` |
-| Nessie spark extensions | `nessie-spark-extensions-3.5_2.12:0.108.4` (match server minor) |
-| openlineage-spark | `openlineage-spark_2.12:1.52.0` |
-| Spark Python deps (pinned D4) | `fastavro==1.12.2`, `requests==2.34.2` (Dockerfile.spark) |
+| `940213f` | **CDC bring-up fixes**: Dockerfile.connect base→quay.io, Confluent Avro converter jars, OL classpath into debezium-connector-mysql; Kafka 7.9 KRaft listener fix (KAFKA-18281, `0.0.0.0`→implicit bind); connector `topic.creation.*`; openlineage.yml `timeoutInMillis: 20000`; marquez-web `WEB_PORT`+wget healthcheck; added `docker-compose.cdc.yml` + `runbook-testing.html` |
+| `ef3b344` | **Airflow 2.11→3.2.2** image bump (specs 04/07, STATE, compose tag, architecture-review reports) |
+| `d0c7579` | **Dockerfile.spark fixes**: Nessie extensions groupId → `org.projectnessie.nessie-integrations`; Python-3.8 pip pins (`fastavro==1.9.7`, `requests==2.32.4`) |
+| `6260d0a` | **Airflow 3 runtime**: compose `airflow api-server`/`airflow scheduler` commands, `AIRFLOW__API__*` keys, `FabAuthManager`, `_AIRFLOW_DB_MIGRATE`, `/healthz`, 409-tolerant connector registration; spec 04/07 updates |
+| `ef108b5` | **Full-pipeline bring-up fixes**: Airflow image JVM+procps+client-driver jars; Spark client-mode (PySpark can't use cluster mode on standalone); DAG Airflow-3 `Asset` migration; `SPARK_CONF`; OpenLineage transport URL fix; `airflow-dag-processor` service; `jars/` build cache (gitignored) |
 
-## 6. Host port remap (final, collision-free)
+Git state: `main` at `ef108b5`, working tree **clean**, pushed to `origin/main`.
 
-| Service | Host → Container |
-|---|---|
-| mysql | 13306 → 3306 |
-| kafka | 9092 → 9092 |
-| schema-registry | 8081 → 8081 |
-| connect | 8083 → 8083 |
-| airflow-webserver | 8080 → 8080 |
-| spark-master UI | 8082 → 8080 (7077 RPC internal only) |
-| spark-worker UI | 8084 → 8081 (NOT 8083 — Connect owns it) |
-| nessie | 19120 → 19120 |
-| minio S3 / console | 9000 → 9000 / 9002 → 9001 |
-| marquez API / admin | 5000 → 5000 / 5001 → 5001 |
-| marquez-web UI | 3000 → 3000 |
+---
 
-## 7. Open items / risks to carry forward
+## 2. Stack state (as of last session close)
 
-- All risks tracked in `specs/06-validation-metrics.md` (incl. the Airflow→Spark→Iceberg
-  review's bring-up validations listed in section 3 above).
-- Open questions OQ1–OQ13 all RESOLVED in `specs/06-validation-metrics.md` (OQ2/OQ10
-  CDC hop; OQ1/OQ3–OQ9/OQ11 OQ-01; OQ12 physical Iceberg identity; OQ13 snapshot-id
-  in run metadata).
-- `sync-tickets.ps1` script bugs — FIXED (CLN-01): close/reopen no longer abort under
-  EAP Stop (native stderr suppressed via `Invoke-Gh`); `New-Issue` honors manifest
-  `status: closed`; `-Mode <mode>` documented as the reliable invocation.
-- The stack is authored, not executed — the spec 07 §7 runbook is the acceptance test.
+`docker compose ps` — 15 services:
 
-## 8. Resume instructions
+- **healthy (13):** airflow-db, connect, kafka, marquez, marquez-db, marquez-web, minio,
+  mysql, nessie, schema-registry, spark-master, spark-worker, airflow-webserver
+- **up (2):** airflow-scheduler, airflow-dag-processor
+- **gates:** `mc` (exited 0), `provision` (exited 1 — connectors already exist; the
+  409-tolerant fix means a fresh `up` now exits 0)
 
-1. Read this file.
-2. Next phase = EXECUTION (section 3): bring up the stack and run the spec 07 runbook.
-   This requires running/building/testing, which design sessions must NOT do.
-3. If resuming design work: update specs/artifacts with per-agent commits (one commit
-   per task per agent), update this file, and push (session-workflow skill).
+The whole stack is running. Do NOT bring it up again from scratch — just restart
+individual services after fixing the Dockerfiles.
 
-## 9. Tickets (GitHub board)
+---
 
-Every task is tracked as a GitHub issue in `ta-brook/data_lineage`, assigned to
-`ta-brook` (human driver) and labelled with the responsible agent (`agent:*`), phase
-(`phase:*`), and priority (`priority:*`).
+## 3. Key facts / decisions locked in this session
 
-- Manifest: `scripts/tickets.json` (source of truth) · human view: `TICKETS.md`
-- Sync: `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode sync`
-  (requires `gh` auth; `gh` at `C:\Users\user\AppData\Local\Programs\gh\bin\gh.exe`)
-- Owner: pm-agent (`.opencode/agents/pm-agent.md`) — syncs at session start/close
-- Current board: EXE-01 (#1, open), CDC-01 (#2, open), T-01 (#3, closed), T-02 (#4,
-  closed), HOP-01 (#5, closed), OQ-01 (#6, closed), T-03 (#7, closed), T-04 (#8, closed),
-  CLN-01 (#9, closed), CLN-02 (#10, closed)
+- **Airflow 3.2.2 is the pinned Airflow** (user requested the bump from 2.11.0).
+- **PySpark on standalone Spark cannot use cluster deploy-mode** — the DAGs were
+  switched to `deploy_mode="client"`. Consequence: the **driver runs in the Airflow
+  container**, so the Airflow image now needs Java, procps, the Spark jars, and
+  `spark-defaults.conf`. The Airflow image is Python 3.13; the Spark worker is 3.8.
+- **OpenLineage transport must be split** `url: http://marquez:5000` +
+  `endpoint: /api/v1/lineage` (NOT a full URL in `url`) or you get `/api/v1/api/v1/lineage`.
+- **`jars/` dir** at repo root is the build cache for the Airflow client-driver jars
+  (gitignored). It currently holds: iceberg-runtime, iceberg-aws-bundle,
+  nessie-spark-extensions, spark-sql-kafka, spark-avro, openlineage-spark, hadoop-aws,
+  aws-sdk-bundle, kafka-clients, spark-token-provider-kafka, commons-pool2.
+- **Local build trick**: the Spark/Airflow images were built from a local build context
+  (`C:\Users\user\AppData\Local\Temp\opencode\spark-ctx` / `airflow-ctx`) that COPYs the
+  pre-downloaded jars instead of slow in-container curl. The repo Dockerfiles (`Dockerfile.spark`,
+  `Dockerfile.airflow`) use curl for a self-contained build; the local ctx skips that.
+
+---
+
+## 4. Where the DAG execution currently stands
+
+Triggering `load_orders` (via `airflow dags trigger load_orders`) gets the Spark app to
+run. The sequence of fixes already landed (all now working):
+
+1. DAG import (Airflow 3 `Asset`, operator params) ✅
+2. Execution-API auth (JWT secret) ✅
+3. Spark submit needs Java + procps (added to Airflow image) ✅
+4. Client-mode driver needs the Spark jars (added to Airflow image) ✅
+5. `fastavro` on the driver (Python 3.13 → 1.12.2) ✅
+6. Nessie catalog identity (conf passed via `SPARK_CONF`) ✅
+7. S3 region (`client.region` + `-Daws.region`) ✅
+8. Kafka runtime jars on executors: kafka-clients, token-provider, commons-pool2 ✅
+9. **Blocker (Section 7): Python version mismatch.**
+
+The Kafka read and OpenLineage emission now work; the write/commit step still needs the
+Python alignment resolved.
+
+---
+
+## 5. Environment / how to run
+
+- Docker Desktop 29.7.2 + Compose v5.5.0. Engine running.
+- `.env` exists (Fernet key generated, MinIO `pocadmin`/`minio-poc-secret`).
+- Full stack: `docker compose up -d` (from repo root).
+- CDC-only: `docker compose -f docker-compose.cdc.yml up -d`.
+- Runbook: `specs/07-deployment-docker.md` §7 (steps 10/10b remain).
+- Marquez UI: http://localhost:3000 · Airflow UI: http://localhost:8080 (admin/admin) ·
+  MinIO console: http://localhost:9002 (pocadmin/minio-poc-secret).
+
+---
+
+## 6. Known caveats (carry forward)
+
+- **`cdc.cnf` is ignored** (world-writable on the Windows bind mount → MySQL refuses it):
+  `server_id=1`, `gtid_mode=OFF` instead of spec's 223344/ON. CDC still works (binlog is
+  ON with ROW/FULL by default) but drifts from spec 03/07. Needs a file-permission fix.
+- **shop-customers emits no own OpenLineage job** on re-run (its datasets appear under the
+  orders job via shared schema history) — data flow + topics work; two-connector OL
+  attribution needs a look.
+- **Python UDF precision**: `confluent_from_avro` is inferred (not exact) lineage — this
+  is by design (OQ5).
+- `jars/` and `__pycache__/` are gitignored (build caches).
+
+---
+
+## 7. RESUME HERE — THE ONE BLOCKER (next session)
+
+### Problem
+PySpark requires the **driver and executor Python minor versions to match**. In client
+deploy-mode the driver runs in the **Airflow 3.2.2 container (Python 3.13)**, but the
+**Spark workers run Python 3.8** (`apache/spark:3.5.0` base is Ubuntu 20.04/focal).
+Error: `[PYTHON_VERSION_MISMATCH] Python in worker has different version (3, 8) than that
+in driver 3.13, PySpark cannot run with different minor versions.`
+
+### What was tried and why it's blocked
+- **deadsnakes PPA → Python 3.13/3.11 on the Spark image**: FAILED. Deadsnakes does NOT
+  publish Python 3.13 (nor 3.11) for Ubuntu 20.04/focal. The PPA only has 3.13+ for
+  jammy/noble. `Dockerfile.spark` currently contains a **broken deadsnakes block
+  (lines ~20-30)** that must be replaced before the image will build.
+- Building Python 3.13 from source (configure/make) was started but not finished.
+
+### Recommended resolution (user chose "Align both to Python 3.11")
+Make driver and executors both use Python 3.11:
+1. **Airflow image** (Debian bookworm): `apt-get install python3.11 python3.11-venv`
+   (verified available: `Python 3.11.2`). Ensure `python3.11 -m pip install
+   fastavro==1.12.2 requests==2.32.4`.
+2. **Spark image** (Ubuntu focal): install a Python 3.11 that focal can provide. Options:
+   - Build from source (`configure && make && make install`), OR
+   - Install a prebuilt standalone Python (e.g. via `uv` / python-build-standalone), OR
+   - Switch the Spark base to a distro with a newer default Python, or upgrade the Spark
+     image base OS to jammy/noble (where deadsnakes has 3.11/3.13). **This changes the
+     pinned `apache/spark:3.5.0` base — update spec 07 / STATE §5 if done.**
+3. Set `spark.pyspark.python=/usr/bin/python3.11` (and `spark.pyspark.driver.python`)
+   in `SPARK_CONF` (dags/config.py) and `spark-defaults.conf` so both sides use 3.11.
+4. Rebuild the Spark image from the local ctx (`C:\Users\user\AppData\Local\Temp\opencode\spark-ctx`)
+   — remember to add the fastavro/requests install for the chosen Python.
+5. `docker compose up -d spark-master spark-worker` (pick up the new image), then trigger
+   both DAGs and verify the lineage chain (Section 0, remaining work).
+
+### After the blocker is resolved
+- Trigger `load_orders` then `load_customers`; wait for `spark_load_*` + `capture_snapshot`
+  to COMPLETE.
+- Verify Marquez :3000 full chain (parent/child join, columnLineage for
+  `total_price = quantity * unit_price`, kafkaOffset facet, snapshot id in XCom).
+- Commit, update STATE.md, close EXE-01 (#1) + CDC-01 (#2) via
+  `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode close -Id <id>`,
+  push to origin.
+
+---
+
+## 8. Ticket board (unchanged)
+
+- EXE-01 (#1, open) — bring up + run spec 07 runbook (in progress, mostly done)
+- CDC-01 (#2, open) — CDC hop lineage validation (DONE in this session, not yet closed)
+- T-01..CLN-02 (#3-#10, closed)
+
+Sync with: `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode sync`
+(requires `gh` auth; `gh` at `C:\Users\user\AppData\Local\Programs\gh\bin\gh.exe`)
