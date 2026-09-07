@@ -1,6 +1,6 @@
 # POC State File — Resume Point
 
-**Last saved:** 2026-09-06 (session ID: `0edf23d3-7364-4fdf-887f-816dd363402b`) — EXECUTION PHASE in progress. Full stack up (15 healthy); CDC hop proven; Airflow 3.2.2 migration landed; ONE blocker remains: PySpark driver/executor Python version mismatch (Airflow driver 3.13 vs Spark worker 3.8) that stops the Airflow→Spark DAG from completing.
+**Last saved:** 2026-09-07 (session ID: `resume-2026-09-07`) — EXECUTION PHASE in progress. The PySpark Python-version blocker (EXE-02) is **RESOLVED**; the Spark app now runs to completion (`spark_load_orders` = SUCCESS). ONE remaining blocker: `capture_snapshot` (pyiceberg read-back) fails with `Missing access key and secret for STATIC authentication mode` against Nessie's Iceberg REST endpoint.
 **Working dir:** `C:\Users\user\Documents\github\data_lineage`
 
 This file records exactly what is done and what remains. On resume, read this file first,
@@ -11,64 +11,66 @@ this file, (3) commit one commit per task per agent, (4) push to origin. This wo
 is codified in the `session-workflow` skill (`.opencode/skills/session-workflow/SKILL.md`).
 
 **HOW TO RESUME (next session):** read this file, then jump straight to **Section 7
-(RESUME HERE — THE ONE BLOCKER)**. Everything in Sections 1–6 is DONE and verified.
-Do NOT re-run the completed bring-up. Only resolve the Python-version blocker, then
-finish the runbook (trigger both DAGs and verify the lineage chain in Marquez).
+(RESUME HERE — THE ONE REMAINING BLOCKER)**. Everything in Sections 1–6 is DONE and
+verified. Only resolve the capture_snapshot S3-auth blocker, then finish the runbook
+(trigger both DAGs and verify the lineage chain in Marquez).
 
 ---
 
 ## 0. Project status at a glance
 
-**Overall status: EXECUTION PHASE — stack is up and mostly working; 1 blocker remains.**
+**Overall status: EXECUTION PHASE — stack is up; the Airflow→Spark hop works; 1 blocker remains on the snapshot read-back.**
 
 The full pipeline `MySQL → Debezium → Kafka → Airflow → Spark → Iceberg (Nessie + MinIO)`
-is brought up as a 16-service docker-compose stack. 15 services are healthy. The CDC hop
-is fully proven end-to-end (data flows + lineage in Marquez). The Airflow hop has been
-migrated to Airflow 3.2.2 and the Spark apps run, but the final data-load DAG does not
-complete because of a PySpark Python-version mismatch between the client-mode driver
-(Airflow container, Python 3.13) and the Spark executors (worker image, Python 3.8).
+is brought up as a 16-service docker-compose stack. The CDC hop is proven. The Airflow→Spark
+hop now WORKS end-to-end: `spark_load_orders` completes (Kafka read → Confluent Avro UDF →
+declarative transform → Iceberg MERGE INTO via Nessie catalog). The only failing task is
+`capture_snapshot`, which reads the Iceberg snapshot id back via pyiceberg.
 
 ### What's DONE and verified (this session)
 
 | Area | Status |
 |---|---|
-| `.env` created (Fernet key generated) | Done |
-| **CDC hop proven end-to-end** (MySQL→Debezium→Kafka→Marquez): connectors RUNNING, topics exist, row inserted→read back, Avro schemas registered, lineage events in Marquez UI :3000 | **DONE** |
-| CDC-only compose (`docker-compose.cdc.yml`) | Done |
-| **Full 16-service stack healthy** (13 healthy + airflow services up; gates `mc`/`provision` exited) | **DONE** |
-| **Airflow 2.11 → 3.2.2 migration** (image, compose, DAGs, specs, STATE) | **DONE** |
-| Airflow 3 runtime fixes (api-server cmd, FabAuthManager, `_AIRFLOW_DB_MIGRATE`, `AIRFLOW__API__BASE_URL`+JWT secret, `/healthz`, `airflow-dag-processor` service) | **DONE** |
-| DAGs migrated to Airflow 3 (`Asset`, client deploy-mode, `SPARK_CONF`) — both import cleanly, both registered in Airflow | **DONE** |
-| Spark app runs to the write step; OpenLineage `START`/`RUNNING`/`FAIL` events emitted to Marquez from both Airflow and Spark | **DONE** |
-| Nessie catalog + MinIO `poc-warehouse` bucket verified | **DONE** |
-| Work pushed to origin (commits `940213f`…`ef108b5`) | **DONE** |
+| **EXE-02 Python-version blocker RESOLVED**: driver + executors aligned to Python 3.11 | **DONE** |
+| Spark image: source-built Python 3.11.9 at `/usr/local/bin/python3` (replaces broken deadsnakes 3.13 block) | **DONE** |
+| Airflow image: Python 3.11 venv `/opt/py311` (pyspark 3.5.0 + fastavro + requests) for the client-mode driver | **DONE** |
+| `spark.pyspark.python` + `spark.pyspark.driver.python` set in `dags/config.py` SPARK_CONF + `spark-defaults.conf` | **DONE** |
+| **Java 17 added to Spark image** (Iceberg 1.11.0 jars are class-file 61.0; base image had Java 11 → UnsupportedClassVersionError on executors) | **DONE** |
+| **fastavro 1.12 API fixes** in both spark-apps: `schema.loads`→`parse_schema(json.loads(...))`, `reader(writer_schema=)`→`schemaless_reader(fo, schema)` | **DONE** |
+| **ZonedTimestamp fix** in both spark-apps: Debezium `created_at`/`updated_at` arrive as ISO-8601 strings; UDF now converts to `datetime` (PySpark TimestampType.toInternal requires datetime) | **DONE** |
+| **`spark_load_orders` task = SUCCESS** (Kafka→UDF→transform→Iceberg MERGE commits; table `poc.shop_orders` created in Nessie + MinIO) | **DONE** |
+| Nessie Iceberg REST warehouse config added to compose (`nessie.catalog.default-warehouse` + `warehouses.warehouse.location`) | **DONE** |
+| `capture_snapshot` switched from `type="nessie"` (does NOT exist in pyiceberg 0.11.1) to `type="rest"` against `/iceberg/` | **DONE** (code) |
+| Stack healthy: 15 services up; connectors RUNNING; topics have data (5 msgs each) | **DONE** |
+| Work committed + pushed to origin (commits `…` — see Section 1) | **DONE** |
 
 ### Remaining work (next session — see Section 7)
 
-1. **BLOCKER**: resolve PySpark driver/executor Python version mismatch (Section 7).
-2. Trigger `load_orders` + `load_customers` DAGs, let them COMPLETE (currently fail at
-   the Spark write/commit due to the Python mismatch).
-3. Verify the full lineage chain in Marquez: `debezium.shop-orders:mysql.0 →
-   kafka://kafka:9092/mysql.shop.orders → airflow:load_orders.spark_load_orders →
-   spark:load_orders`, plus the columnLineage facet, kafkaOffset facet, and the
-   `capture_snapshot` snapshot id (runbook steps 10 / 10b).
-4. Close tickets EXE-01 (#1) + CDC-01 (#2) via `sync-tickets.ps1`; update STATE.md and push.
+1. **BLOCKER**: `capture_snapshot` fails with `Missing access key and secret for STATIC authentication mode` (pyiceberg REST catalog S3 auth). See Section 7 for analysis + candidate fixes.
+2. Once capture_snapshot passes: trigger `load_customers`, let both DAGs COMPLETE.
+3. Verify the full lineage chain in Marquez (:3000): `debezium.shop-orders:mysql.0 → kafka://kafka:9092/mysql.shop.orders → airflow:load_orders.spark_load_orders → spark:load_orders`, plus columnLineage facet, kafkaOffset facet, and the `capture_snapshot` snapshot id (runbook steps 10 / 10b).
+4. Close tickets EXE-01 (#1) + CDC-01 (#2) + EXE-02 (#11) via `sync-tickets.ps1`; update STATE.md and push.
 
 ---
 
-## 1. Session history (this execution session)
+## 1. Session history
 
 All landed and PUSHED to origin (one commit per logical unit, matching repo style):
 
 | Commit | What |
 |---|---|
-| `940213f` | **CDC bring-up fixes**: Dockerfile.connect base→quay.io, Confluent Avro converter jars, OL classpath into debezium-connector-mysql; Kafka 7.9 KRaft listener fix (KAFKA-18281, `0.0.0.0`→implicit bind); connector `topic.creation.*`; openlineage.yml `timeoutInMillis: 20000`; marquez-web `WEB_PORT`+wget healthcheck; added `docker-compose.cdc.yml` + `runbook-testing.html` |
-| `ef3b344` | **Airflow 2.11→3.2.2** image bump (specs 04/07, STATE, compose tag, architecture-review reports) |
-| `d0c7579` | **Dockerfile.spark fixes**: Nessie extensions groupId → `org.projectnessie.nessie-integrations`; Python-3.8 pip pins (`fastavro==1.9.7`, `requests==2.32.4`) |
-| `6260d0a` | **Airflow 3 runtime**: compose `airflow api-server`/`airflow scheduler` commands, `AIRFLOW__API__*` keys, `FabAuthManager`, `_AIRFLOW_DB_MIGRATE`, `/healthz`, 409-tolerant connector registration; spec 04/07 updates |
-| `ef108b5` | **Full-pipeline bring-up fixes**: Airflow image JVM+procps+client-driver jars; Spark client-mode (PySpark can't use cluster mode on standalone); DAG Airflow-3 `Asset` migration; `SPARK_CONF`; OpenLineage transport URL fix; `airflow-dag-processor` service; `jars/` build cache (gitignored) |
+| `940213f` | (prior session) CDC bring-up fixes + CDC-only compose |
+| `ef3b344` | (prior session) Airflow 2.11→3.2.2 image bump |
+| `d0c7579` | (prior session) Dockerfile.spark Nessie groupId + Python-3.8 pip pins |
+| `6260d0a` | (prior session) Airflow 3 runtime compose/spec fixes |
+| `ef108b5` | (prior session) Full-pipeline bring-up fixes (Airflow 3 runtime + Spark client mode) |
+| `baa657e` | (prior session) STATE.md execution-phase progress + blocker |
+| `52a483c` | (prior session) EXE-02 ticket added |
+| *(this session)* | EXE-02 Python 3.11 alignment (Dockerfiles, config, spark-defaults) |
+| *(this session)* | EXE-02 fastavro 1.12 + ZonedTimestamp fixes (spark-apps) |
+| *(this session)* | EXE-02 Java 17 + capture_snapshot REST catalog + Nessie warehouse config (compose, dags) |
 
-Git state: `main` at `ef108b5`, working tree **clean**, pushed to `origin/main`.
+Git state: `main` at `52a483c` + 3 new commits (this session), pushed to `origin/main`.
 
 ---
 
@@ -79,51 +81,69 @@ Git state: `main` at `ef108b5`, working tree **clean**, pushed to `origin/main`.
 - **healthy (13):** airflow-db, connect, kafka, marquez, marquez-db, marquez-web, minio,
   mysql, nessie, schema-registry, spark-master, spark-worker, airflow-webserver
 - **up (2):** airflow-scheduler, airflow-dag-processor
-- **gates:** `mc` (exited 0), `provision` (exited 1 — connectors already exist; the
-  409-tolerant fix means a fresh `up` now exits 0)
+- **gates:** `mc` (exited 0), `provision` (exited 0)
 
 The whole stack is running. Do NOT bring it up again from scratch — just restart
 individual services after fixing the Dockerfiles.
+
+**IMPORTANT (this session):** the `nessie` container was recreated (to add the REST
+warehouse config) and the `nessie-data` volume was EMPTY — the RocksDB catalog data did
+not persist (previous session's tables were in the container layer, not the volume).
+The DAGs are idempotent (CREATE IF NOT EXISTS + MERGE), so re-running `load_orders`
+recreated `poc.shop_orders`. Verify volume persistence is a follow-up risk (Section 6).
 
 ---
 
 ## 3. Key facts / decisions locked in this session
 
-- **Airflow 3.2.2 is the pinned Airflow** (user requested the bump from 2.11.0).
-- **PySpark on standalone Spark cannot use cluster deploy-mode** — the DAGs were
-  switched to `deploy_mode="client"`. Consequence: the **driver runs in the Airflow
-  container**, so the Airflow image now needs Java, procps, the Spark jars, and
-  `spark-defaults.conf`. The Airflow image is Python 3.13; the Spark worker is 3.8.
-- **OpenLineage transport must be split** `url: http://marquez:5000` +
-  `endpoint: /api/v1/lineage` (NOT a full URL in `url`) or you get `/api/v1/api/v1/lineage`.
-- **`jars/` dir** at repo root is the build cache for the Airflow client-driver jars
-  (gitignored). It currently holds: iceberg-runtime, iceberg-aws-bundle,
-  nessie-spark-extensions, spark-sql-kafka, spark-avro, openlineage-spark, hadoop-aws,
-  aws-sdk-bundle, kafka-clients, spark-token-provider-kafka, commons-pool2.
-- **Local build trick**: the Spark/Airflow images were built from a local build context
-  (`C:\Users\user\AppData\Local\Temp\opencode\spark-ctx` / `airflow-ctx`) that COPYs the
-  pre-downloaded jars instead of slow in-container curl. The repo Dockerfiles (`Dockerfile.spark`,
-  `Dockerfile.airflow`) use curl for a self-contained build; the local ctx skips that.
+- **Python 3.11 alignment (EXE-02, user-chosen resolution):**
+  - **Spark image (executor):** source-build Python 3.11.9 (no `--enable-optimizations`,
+    ~30s build) → `/usr/local/bin/python3` (first on PATH). Deadsnakes has NO 3.11/3.13
+    for focal (tried, failed). `spark.pyspark.python=/usr/local/bin/python3`.
+  - **Airflow image (driver):** Debian bookworm `python3.11` + venv `/opt/py311`
+    (system python3.11 is PEP-668 externally-managed → venv avoids `--break-system-packages`).
+    `/opt/py311/bin/python` has pyspark 3.5.0 + fastavro 1.12.2 + requests 2.32.4.
+    `spark.pyspark.driver.python=/opt/py311/bin/python`. Airflow itself stays on 3.13.
+- **Java 17 in Spark image:** Iceberg 1.11.0 jars are class-file 61.0 (Java 17); the
+  apache/spark:3.5.0 base ships Temurin Java 11 → `UnsupportedClassVersionError` on the
+  executor write path. Installed `openjdk-17-jre-headless`, `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`.
+- **fastavro 1.12 API breaks** (vs the old 1.9.7 pin on Python 3.8):
+  - `fastavro.schema.loads(json_str)` REMOVED → `fastavro.parse_schema(json.loads(...))`.
+  - `fastavro.reader(fo, writer_schema=...)` REMOVED (container-file only) →
+    `fastavro.schemaless_reader(fo, writer_schema)` for Confluent Avro raw records.
+- **ZonedTimestamp:** Debezium `created_at`/`updated_at` are `io.debezium.time.ZonedTimestamp`
+  (ISO-8601 strings). fastavro returns them as strings; PySpark `TimestampType.toInternal`
+  needs a `datetime` → UDF converts via `datetime.fromisoformat(value.replace("Z","+00:00"))`.
+- **pyiceberg 0.11.1 has NO native Nessie catalog type** (`CatalogType` = rest/hive/glue/
+  dynamodb/sql/in-memory/bigquery). `capture_snapshot` now uses `type="rest"` against
+  `http://nessie:19120/iceberg/` with `warehouse="warehouse"`.
+- **Nessie REST warehouse config** (compose): `nessie.catalog.default-warehouse=warehouse`,
+  `nessie.catalog.warehouses.warehouse.location=s3://poc-warehouse/`. Without this the
+  REST endpoint 500s with "Warehouse ... is not known".
+- **Local build trick** unchanged: Spark/Airflow images built from local ctx
+  (`C:\Users\user\AppData\Local\Temp\opencode\spark-ctx` / repo root for airflow) that
+  COPYs pre-downloaded jars instead of slow in-container curl. `spark-ctx/Dockerfile` and
+  `spark-ctx/spark-defaults.conf` were updated to match the repo files.
 
 ---
 
 ## 4. Where the DAG execution currently stands
 
-Triggering `load_orders` (via `airflow dags trigger load_orders`) gets the Spark app to
-run. The sequence of fixes already landed (all now working):
+Triggering `load_orders` now gets the Spark app to **SUCCESS** (verified 2026-09-07):
 
 1. DAG import (Airflow 3 `Asset`, operator params) ✅
 2. Execution-API auth (JWT secret) ✅
 3. Spark submit needs Java + procps (added to Airflow image) ✅
 4. Client-mode driver needs the Spark jars (added to Airflow image) ✅
-5. `fastavro` on the driver (Python 3.13 → 1.12.2) ✅
-6. Nessie catalog identity (conf passed via `SPARK_CONF`) ✅
-7. S3 region (`client.region` + `-Daws.region`) ✅
-8. Kafka runtime jars on executors: kafka-clients, token-provider, commons-pool2 ✅
-9. **Blocker (Section 7): Python version mismatch.**
-
-The Kafka read and OpenLineage emission now work; the write/commit step still needs the
-Python alignment resolved.
+5. **Python 3.11 alignment (driver venv + executor source-build)** ✅ (EXE-02)
+6. **fastavro 1.12 API fixes** (parse_schema + schemaless_reader) ✅
+7. **ZonedTimestamp → datetime in UDF** ✅
+8. **Java 17 on executors** (Iceberg write path) ✅
+9. Nessie catalog identity (conf via `SPARK_CONF`) ✅
+10. S3 region (`client.region` + `-Daws.region`) ✅
+11. Kafka runtime jars on executors ✅
+12. **`spark_load_orders` = SUCCESS** — Kafka read, UDF decode, transform, Iceberg MERGE commit ✅
+13. **BLOCKER (Section 7): `capture_snapshot` pyiceberg REST catalog S3 auth.**
 
 ---
 
@@ -144,6 +164,10 @@ Python alignment resolved.
 - **`cdc.cnf` is ignored** (world-writable on the Windows bind mount → MySQL refuses it):
   `server_id=1`, `gtid_mode=OFF` instead of spec's 223344/ON. CDC still works (binlog is
   ON with ROW/FULL by default) but drifts from spec 03/07. Needs a file-permission fix.
+- **Nessie data persistence UNVERIFIED**: the `nessie-data` volume was empty when the
+  container was recreated this session (tables were lost; DAG recreated them). Confirm
+  RocksDB writes to `/data/nessie` in the volume on the next restart. If not, the volume
+  mount or the `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH` needs a look.
 - **shop-customers emits no own OpenLineage job** on re-run (its datasets appear under the
   orders job via shared schema history) — data flow + topics work; two-connector OL
   attribution needs a look.
@@ -153,46 +177,48 @@ Python alignment resolved.
 
 ---
 
-## 7. RESUME HERE — THE ONE BLOCKER (next session)
+## 7. RESUME HERE — THE ONE REMAINING BLOCKER (next session)
 
 ### Problem
-PySpark requires the **driver and executor Python minor versions to match**. In client
-deploy-mode the driver runs in the **Airflow 3.2.2 container (Python 3.13)**, but the
-**Spark workers run Python 3.8** (`apache/spark:3.5.0` base is Ubuntu 20.04/focal).
-Error: `[PYTHON_VERSION_MISMATCH] Python in worker has different version (3, 8) than that
-in driver 3.13, PySpark cannot run with different minor versions.`
+`spark_load_orders` SUCCEEDS, but `capture_snapshot` (the pyiceberg read-back of the
+Iceberg snapshot id) fails. After switching to the REST catalog (`type="rest"`,
+`uri="http://nessie:19120/iceberg/"`, `warehouse="warehouse"`), the error is:
 
-### What was tried and why it's blocked
-- **deadsnakes PPA → Python 3.13/3.11 on the Spark image**: FAILED. Deadsnakes does NOT
-  publish Python 3.13 (nor 3.11) for Ubuntu 20.04/focal. The PPA only has 3.13+ for
-  jammy/noble. `Dockerfile.spark` currently contains a **broken deadsnakes block
-  (lines ~20-30)** that must be replaced before the image will build.
-- Building Python 3.13 from source (configure/make) was started but not finished.
+```
+Error: Bad Request for url: http://nessie:19120/iceberg/v1/main%7Cwarehouse/namespaces/poc/tables/shop_orders
+Exception: Missing access key and secret for STATIC authentication mode
+(pyiceberg/catalog/rest/__init__.py)
+```
 
-### Recommended resolution (user chose "Align both to Python 3.11")
-Make driver and executors both use Python 3.11:
-1. **Airflow image** (Debian bookworm): `apt-get install python3.11 python3.11-venv`
-   (verified available: `Python 3.11.2`). Ensure `python3.11 -m pip install
-   fastavro==1.12.2 requests==2.32.4`.
-2. **Spark image** (Ubuntu focal): install a Python 3.11 that focal can provide. Options:
-   - Build from source (`configure && make && make install`), OR
-   - Install a prebuilt standalone Python (e.g. via `uv` / python-build-standalone), OR
-   - Switch the Spark base to a distro with a newer default Python, or upgrade the Spark
-     image base OS to jammy/noble (where deadsnakes has 3.11/3.13). **This changes the
-     pinned `apache/spark:3.5.0` base — update spec 07 / STATE §5 if done.**
-3. Set `spark.pyspark.python=/usr/bin/python3.11` (and `spark.pyspark.driver.python`)
-   in `SPARK_CONF` (dags/config.py) and `spark-defaults.conf` so both sides use 3.11.
-4. Rebuild the Spark image from the local ctx (`C:\Users\user\AppData\Local\Temp\opencode\spark-ctx`)
-   — remember to add the fastavro/requests install for the chosen Python.
-5. `docker compose up -d spark-master spark-worker` (pick up the new image), then trigger
-   both DAGs and verify the lineage chain (Section 0, remaining work).
+### Analysis
+- The REST catalog connects (config endpoint works; Nessie warehouse is configured).
+- The table lookup 400s because pyiceberg's S3FileIO (client-side, reading table metadata
+  from MinIO) is in STATIC auth mode but has no access key/secret.
+- The DAG passes `s3.access-key-id` / `s3.secret-access-key` in the `load_catalog(...)`
+  properties, but pyiceberg's REST catalog apparently does NOT forward these to the
+  S3FileIO client (or expects them under different property names / at a different level).
+
+### Candidate fixes (try in order)
+1. **Pass S3 creds as top-level catalog properties** (not nested under `s3.`): pyiceberg
+   REST catalog may expect `s3.access-key-id` AND `s3.secret-access-key` at the top level
+   of the catalog config, OR `client.s3.access-key-id` style. Check pyiceberg 0.11.1
+   `RestCatalog`/`S3FileIO` property resolution (`pyiceberg/io/pyarrow.py`, `pyiceberg/catalog/rest/__init__.py`).
+2. **Configure S3 creds server-side in Nessie** (compose `nessie.catalog.service.s3.*`
+   with `auth-type=STATIC` + `urn:nessie-secret:quarkus:...` secrets) so the REST config
+   vends them to the client. See https://projectnessie.org/guides/iceberg-rest/ (S3 example).
+3. **Fallback read-back without pyiceberg REST**: read the current snapshot id directly
+   from the Iceberg metadata JSON in MinIO (the table metadata file lists
+   `current-snapshot-id`), or via the Nessie API v2 contents response (which includes the
+   metadata location). This avoids the REST catalog entirely.
+4. **Alternative**: bump pyiceberg to a version with a native Nessie catalog type (if one
+   exists) — but 0.11.1 is pinned (D4); prefer options 1–3.
 
 ### After the blocker is resolved
 - Trigger `load_orders` then `load_customers`; wait for `spark_load_*` + `capture_snapshot`
   to COMPLETE.
 - Verify Marquez :3000 full chain (parent/child join, columnLineage for
   `total_price = quantity * unit_price`, kafkaOffset facet, snapshot id in XCom).
-- Commit, update STATE.md, close EXE-01 (#1) + CDC-01 (#2) via
+- Commit, update STATE.md, close EXE-01 (#1) + CDC-01 (#2) + EXE-02 (#11) via
   `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode close -Id <id>`,
   push to origin.
 
@@ -201,8 +227,10 @@ Make driver and executors both use Python 3.11:
 ## 8. Ticket board
 
 - EXE-01 (#1, open) — bring up + run spec 07 runbook (in progress, mostly done)
-- EXE-02 (#11, open) - resolve PySpark driver/executor Python version mismatch (the one blocker; see Section 7)
-- CDC-01 (#2, open) — CDC hop lineage validation (DONE in this session, not yet closed)
+- EXE-02 (#11, open) — resolve PySpark driver/executor Python version mismatch
+  (**RESOLVED in code + verified: spark_load_orders SUCCESS**; not yet closed — the
+  capture_snapshot blocker is the tail of this ticket / EXE-01 runbook steps 10/10b)
+- CDC-01 (#2, open) — CDC hop lineage validation (DONE in a prior session, not yet closed)
 - T-01..CLN-02 (#3-#10, closed)
 
 Sync with: `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode sync`
