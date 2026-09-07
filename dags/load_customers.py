@@ -89,15 +89,20 @@ def capture_snapshot(**context):
     (s3.endpoint) so the Nessie catalog resolves s3://poc-warehouse/ to minio:9000,
     not AWS S3. A missing snapshot means the Spark run did not commit, so we fail
     loudly rather than emit a broken lineage path.
-    """
+"""
     from pyiceberg.catalog import load_catalog
 
+    # pyiceberg 0.11.1 has NO native Nessie catalog type (only rest/hive/glue/
+    # dynamodb/sql/in-memory/bigquery), so the read-back goes through Nessie's
+    # Iceberg REST endpoint (/iceberg/). Nessie maps the warehouse name to the
+    # storage location server-side (compose: nessie.catalog.warehouses.warehouse.
+    # location=s3://poc-warehouse/). The S3 config is passed client-side because
+    # pyiceberg (not Nessie) reads the table metadata from MinIO.
     catalog = load_catalog(
         "nessie",
-        type="nessie",
-        uri=config.NESSIE_URI,
-        ref=config.NESSIE_REF,
-        warehouse=config.WAREHOUSE,
+        type="rest",
+        uri="http://nessie:19120/iceberg/",
+        warehouse="warehouse",
         **{
             # MinIO S3 config (same property names as Iceberg's S3FileIO) so the
             # warehouse resolves to minio:9000, not AWS S3.

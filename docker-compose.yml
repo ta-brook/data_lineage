@@ -290,6 +290,12 @@ services:
     environment:
       NESSIE_VERSION_STORE_TYPE: ROCKSDB # persists catalog metadata to the named volume (spec 05)
       NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH: /data/nessie
+      # Iceberg REST catalog (spec 05 §2): the pyiceberg capture_snapshot read-back
+      # (dags/load_*.py) uses type="rest" against /iceberg/ (pyiceberg 0.11.1 has no
+      # native Nessie type). Nessie must know the warehouse name -> location mapping;
+      # "warehouse" is the default so clients can omit the warehouse param.
+      nessie.catalog.default-warehouse: warehouse
+      nessie.catalog.warehouses.warehouse.location: s3://poc-warehouse/
     volumes:
       - nessie-data:/data
     healthcheck:
