@@ -17,6 +17,8 @@ Spark's built-in from_avro function (review D8).
 """
 
 import io
+import json
+from datetime import datetime
 
 import fastavro
 import requests
@@ -45,7 +47,7 @@ def _fetch_writer_schema(schema_id):
             "{}/schemas/ids/{}".format(SCHEMA_REGISTRY_URL, schema_id), timeout=10
         )
         resp.raise_for_status()
-        _SCHEMA_CACHE[schema_id] = fastavro.schema.loads(resp.json()["schema"])
+        _SCHEMA_CACHE[schema_id] = fastavro.parse_schema(json.loads(resp.json()["schema"]))
     return _SCHEMA_CACHE[schema_id]
 
 
@@ -68,6 +70,20 @@ ENVELOPE_SCHEMA = StructType([
 ])
 
 
+def _to_datetime(value):
+    """Convert a Debezium ZonedTimestamp string (ISO-8601, e.g. 2026-09-07T14:00:00.000Z)
+    to a timezone-aware datetime. Non-string values (already datetime) pass through.
+
+    The UDF return schema declares created_at/updated_at as TimestampType, and
+    PySpark's TimestampType.toInternal requires a datetime, not the raw string
+    fastavro returns for io.debezium.time.ZonedTimestamp (a non-standard logical
+    type fastavro leaves as-is).
+    """
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value
+
+
 def confluent_from_avro(value_bytes):
     """
     Decode one Confluent Avro Kafka value into (after, op).
@@ -85,11 +101,20 @@ def confluent_from_avro(value_bytes):
     schema_id = int.from_bytes(value_bytes[1:5], "big")
     writer_schema = _fetch_writer_schema(schema_id)
     payload = value_bytes[5:]
-    with fastavro.reader(io.BytesIO(payload), writer_schema=writer_schema) as reader:
-        record = next(reader)  # one Debezium envelope per Kafka record
+    # Confluent Avro payloads are raw Avro binary records (no object-container
+    # header), so the writer schema must be passed explicitly: schemaless_reader
+    # (fastavro >=1.12 removed writer_schema from reader(), which is for
+    # container files only).
+    record = fastavro.schemaless_reader(io.BytesIO(payload), writer_schema)
     after = record.get("after")
     if after is None:
         return None  # delete event (after=null) — deletes are out of POC scope
+    # ZonedTimestamp fields arrive as ISO-8601 strings; convert to datetime so
+    # PySpark can map them onto the declared TimestampType return columns.
+    after = dict(after)
+    for ts_field in ("created_at", "updated_at"):
+        if ts_field in after:
+            after[ts_field] = _to_datetime(after[ts_field])
     return {"after": after, "op": record.get("op")}
 
 
