@@ -61,6 +61,13 @@ SPARK_CONF = {
     # Jars for the client-mode driver (Iceberg/Nessie/Kafka/Avro/OpenLineage/S3A),
     # baked into the Airflow image at /opt/spark/jars (Dockerfile.airflow).
     "spark.jars": "/opt/spark/jars/*",
+    # PySpark driver/executor Python minor versions must match (EXE-02). In client
+    # deploy-mode the DRIVER runs in the Airflow container -> /opt/py311/bin/python
+    # (Python 3.11 venv, Dockerfile.airflow). The EXECUTORS run in the Spark image
+    # -> /usr/local/bin/python3 (source-built Python 3.11.9, Dockerfile.spark).
+    # Both are Python 3.11 so PySpark's version check passes.
+    "spark.pyspark.driver.python": "/opt/py311/bin/python",
+    "spark.pyspark.python": "/usr/local/bin/python3",
     # Nessie catalog (Iceberg)
     "spark.sql.catalog.nessie": "org.apache.iceberg.spark.SparkCatalog",
     "spark.sql.catalog.nessie.type": "nessie",

@@ -17,17 +17,39 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Python 3.13 (match the Airflow 3.x client driver) ----------------------
-# PySpark requires driver and executor Python minor versions to match. The
-# Airflow 3.2.2 driver runs Python 3.13, but apache/spark:3.5.0 ships Python
-# 3.8. Install Python 3.13 (deadsnakes PPA) and make it the default python3 so
-# executors run the same version as the driver.
-RUN add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends python3.13 python3.13-distutils python3.13-venv \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 100 \
-    && update-alternatives --set python3 /usr/bin/python3.13 \
+# --- Java 17 (Iceberg 1.11.0 requires class file 61.0 = Java 17) -------------
+# apache/spark:3.5.0 ships Temurin Java 11 (class file 55.0); the Iceberg
+# SparkWrite$WriterFactory on the EXECUTOR fails with UnsupportedClassVersionError
+# under Java 11. Spark 3.5 supports Java 17, so install OpenJDK 17 and make it
+# the default (JAVA_HOME + PATH). The Airflow driver already runs Java 17.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# --- Python 3.11 (match the Airflow 3.x client driver) ----------------------
+# PySpark requires driver and executor Python minor versions to match. The
+# Airflow 3.2.2 driver runs Python 3.11 (see Dockerfile.airflow /opt/py311),
+# but apache/spark:3.5.0 ships Python 3.8 (Ubuntu 20.04/focal). Deadsnakes has
+# NO python3.11 for focal (tried), so we build Python 3.11.9 from source and
+# install it to /usr/local/bin/python3 (first on PATH -> `python3` resolves to
+# 3.11). --enable-optimizations is omitted to keep the build fast (~30s); the
+# POC does not need PGO. This is the executor Python (spark.pyspark.python).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev \
+        libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev liblzma-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && cd /tmp \
+    && wget -q https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz \
+    && tar xzf Python-3.11.9.tgz \
+    && cd Python-3.11.9 \
+    && ./configure >/dev/null 2>&1 \
+    && make -j2 >/dev/null 2>&1 \
+    && make install >/dev/null 2>&1 \
+    && rm -rf /tmp/Python-3.11.9 /tmp/Python-3.11.9.tgz \
+    && /usr/local/bin/python3 --version
 
 # --- Iceberg Spark runtime (Spark 3.5 / Scala 2.12) --------------------------
 # SparkCatalog + Iceberg table operations (MERGE INTO, snapshot commits).
@@ -96,11 +118,11 @@ RUN curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
 # --- Python deps for the confluent_from_avro UDF (spark-apps/load_*.py) ------
 # fastavro: decode Confluent Avro payloads with the registry writer schema.
 # requests: fetch the writer schema JSON from http://schema-registry:8081.
-# Versions pinned (D4) per the spec 06 version-drift risk. Python is now 3.13
+# Versions pinned (D4) per the spec 06 version-drift risk. Python is now 3.11
 # (matching the Airflow 3.x driver), so fastavro 1.12.2 / requests 2.32.4 are used
 # (they require Python >=3.10; on 3.8 they had to be older pins).
-RUN python3.13 -m ensurepip \
-    && python3.13 -m pip install --no-cache-dir fastavro==1.12.2 requests==2.32.4
+RUN /usr/local/bin/python3 -m ensurepip \
+    && /usr/local/bin/python3 -m pip install --no-cache-dir fastavro==1.12.2 requests==2.32.4
 
 # --- Spark defaults ----------------------------------------------------------
 # Nessie catalog, S3A mirror, OpenLineage listener, SQL extensions.

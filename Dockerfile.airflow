@@ -21,10 +21,22 @@ FROM apache/airflow:3.2.2
 # then restore the default airflow user.
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-17-jre-headless procps \
+    && apt-get install -y --no-install-recommends openjdk-17-jre-headless procps python3.11 python3.11-venv \
     && rm -rf /var/lib/apt/lists/* \
     && echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> /etc/bash.bashrc
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+# PySpark driver/executor Python minor versions must match (EXE-02). In client
+# deploy-mode the PySpark DRIVER runs in this container. The base image's default
+# python is 3.13, but the Spark executors run Python 3.11 (Dockerfile.spark
+# source-builds 3.11.9). Create a dedicated Python 3.11 venv (/opt/py311) with
+# pyspark + the UDF deps, and point spark.pyspark.driver.python at it (config.py
+# SPARK_CONF). Airflow itself stays on the base 3.13; only the PySpark driver uses
+# the venv. A venv is used (not the system python3.11) because Debian's system
+# python is PEP-668 externally-managed and rejects pip installs.
+RUN python3.11 -m venv /opt/py311 \
+    && /opt/py311/bin/pip install --no-cache-dir \
+        pyspark==3.5.0 \
+        fastavro==1.12.2 requests==2.32.4
 # In client deploy-mode the PySpark driver runs in this container, so it needs
 # the same Iceberg/Nessie/Kafka/Avro/OpenLineage/S3A jars as the Spark image
 # (Dockerfile.spark). COPY them from a build context dir (jars/) - see the
