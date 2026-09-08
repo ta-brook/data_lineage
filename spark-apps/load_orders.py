@@ -183,6 +183,28 @@ def main():
     """)
     flattened.createOrReplaceTempView("kafka_orders_flat")
 
+    # --- Step 4a: dedup by PK (CDC full-topic re-read) ----------------------
+    # The topic holds the full CDC history (initial snapshot + binlog changes),
+    # and startingOffsets=earliest re-reads ALL of it every run, so a key that
+    # changed after the snapshot appears multiple times in the source. Iceberg
+    # MERGE requires a UNIQUE source key (MERGE_CARDINALITY_VIOLATION otherwise),
+    # so keep only the latest event per PK (max Kafka offset) before the upsert.
+    # This is the standard CDC-to-lakehouse upsert pattern for full-topic reads.
+    deduped = spark.sql("""
+        SELECT after, op, topic, partition, offset
+        FROM (
+            SELECT after, op, topic, partition, offset,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY after.order_id ORDER BY offset DESC
+                   ) AS rn
+            FROM kafka_orders_flat
+            WHERE after IS NOT NULL   -- tombstones + deletes (after=null)
+              AND op != 'd'           -- explicit delete filter (defense in depth)
+        ) t
+        WHERE rn = 1
+    """)
+    deduped.createOrReplaceTempView("kafka_orders_dedup")
+
     # --- Step 4: declarative transform (EXACT column lineage) ----------------
     # Every output column is mapped from an input column (or a visible SQL
     # expression) in the logical plan -> the openlineage-spark listener can
@@ -207,7 +229,7 @@ def main():
             after.status                AS status,
             after.created_at            AS created_at,
             after.updated_at            AS updated_at
-        FROM kafka_orders_flat
+        FROM kafka_orders_dedup
         WHERE after IS NOT NULL   -- tombstones + deletes (after=null)
           AND op != 'd'           -- explicit delete filter (defense in depth)
     """)

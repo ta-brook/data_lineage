@@ -177,6 +177,28 @@ def main():
     """)
     flattened.createOrReplaceTempView("kafka_customers_flat")
 
+    # --- Step 4a: dedup by PK (CDC full-topic re-read) ----------------------
+    # The topic holds the full CDC history (initial snapshot + binlog changes),
+    # and startingOffsets=earliest re-reads ALL of it every run, so a key that
+    # changed after the snapshot appears multiple times in the source. Iceberg
+    # MERGE requires a UNIQUE source key (MERGE_CARDINALITY_VIOLATION otherwise),
+    # so keep only the latest event per PK (max Kafka offset) before the upsert.
+    # This is the standard CDC-to-lakehouse upsert pattern for full-topic reads.
+    deduped = spark.sql("""
+        SELECT after, op, topic, partition, offset
+        FROM (
+            SELECT after, op, topic, partition, offset,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY after.customer_id ORDER BY offset DESC
+                   ) AS rn
+            FROM kafka_customers_flat
+            WHERE after IS NOT NULL   -- tombstones + deletes (after=null)
+              AND op != 'd'           -- explicit delete filter (defense in depth)
+        ) t
+        WHERE rn = 1
+    """)
+    deduped.createOrReplaceTempView("kafka_customers_dedup")
+
     # --- Step 4: passthrough transform (EXACT column lineage) ----------------
     # Explicit 1:1 column list, no derived columns (spec 04 §4: passthrough /
     # copy = exact lineage). Precision qualifier (OQ5, review P1): exactness
@@ -193,7 +215,7 @@ def main():
             after.city        AS city,
             after.created_at  AS created_at,
             after.updated_at  AS updated_at
-        FROM kafka_customers_flat
+        FROM kafka_customers_dedup
         WHERE after IS NOT NULL   -- tombstones + deletes (after=null)
           AND op != 'd'           -- explicit delete filter (defense in depth)
     """)
