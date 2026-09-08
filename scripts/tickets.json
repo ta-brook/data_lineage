@@ -11,7 +11,7 @@
                                        "phase:execution",
                                        "priority:high"
                                    ],
-                        "status":  "open",
+                        "status":  "closed",
                         "github_number":  1
                     },
                     {
@@ -23,7 +23,7 @@
                                        "phase:cdc",
                                        "priority:high"
                                    ],
-                        "status":  "open",
+                        "status":  "closed",
                         "github_number":  2
                     },
                     {
@@ -141,7 +141,7 @@
                                        "phase:execution",
                                        "priority:high"
                                    ],
-                        "status":  "open",
+                        "status":  "closed",
                         "github_number":  11
                     }
                 ]
