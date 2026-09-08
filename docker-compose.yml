@@ -166,7 +166,16 @@ services:
       # Airflow 3: the scheduler's LocalExecutor spawns tasks that connect back to
       # the api-server's execution API. Default is localhost:8080 (the container's
       # own loopback) -> point it at the api-server service instead.
-      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__API__BASE_URL: http://localhost:8080
+      # api.base_url is ALSO used for the FAB login redirect (get_url_login ->
+      # urljoin(api.base_url, "/auth/login/")), so it must be the EXTERNALLY
+      # reachable host (localhost:8080) or the browser gets redirected to the
+      # container-internal hostname airflow-webserver:8080 and fails to load.
+      # The task-runner -> api-server connection is decoupled via
+      # core.execution_api_server_url (read with fallback in local_executor.py /
+      # execute_workload.py), pinned to the internal service DNS so scheduler-spawned
+      # task runners still reach the api-server container.
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-webserver:8080/execution/
       # Airflow 3: JWT used to authenticate task-runner <-> execution API must be
       # identical across scheduler (signs) and api-server (validates).
       AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__WEBSERVER__SECRET_KEY}
