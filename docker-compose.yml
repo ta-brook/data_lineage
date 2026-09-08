@@ -181,6 +181,13 @@ services:
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
       AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type": "http", "url": "http://marquez:5000", "endpoint": "/api/v1/lineage"}' # Marquez sink (spec 04; T-01)
       AIRFLOW__OPENLINEAGE__NAMESPACE: airflow # matches the DAGs' inline pin (spec 02/04)
+      # SparkSubmitOperator parent/transport conf injection (EXE-01 runbook step 10):
+      # both default to False, so without these the Spark run never gets
+      # spark.openlineage.parentJobName/parentRunId and the Airflow->Spark parentRun
+      # facet is missing in Marquez. Enable both so the child Spark run links back to
+      # the Airflow task run (spec 02/04 parentRun facet).
+      AIRFLOW__OPENLINEAGE__SPARK_INJECT_PARENT_JOB_INFO: "true"
+      AIRFLOW__OPENLINEAGE__SPARK_INJECT_TRANSPORT_INFO: "true"
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pocadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD} # for pyiceberg capture_snapshot read-back
     volumes:
@@ -289,15 +296,36 @@ services:
       - "19120:19120"
     environment:
       NESSIE_VERSION_STORE_TYPE: ROCKSDB # persists catalog metadata to the named volume (spec 05)
-      NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH: /data/nessie
+      # Correct 0.108.4 key is .persist.rocks.database-path (NOT .persist.rocksdb.db-path,
+      # which is silently ignored -> RocksDB fell back to /tmp/nessie-rocksdb-store in the
+      # container layer and tables were lost on recreate). Points RocksDB at the volume.
+      # The volume is mounted at /deployments/data (owned by the nessie user, uid 10000)
+      # because a fresh named volume mounted at /data is root-owned and RocksDB cannot
+      # mkdir there (Permission denied). Mounting at an image dir owned by nessie makes
+      # Docker copy that ownership into the empty volume.
+      NESSIE_VERSION_STORE_PERSIST_ROCKS_DATABASE_PATH: /deployments/data/nessie
       # Iceberg REST catalog (spec 05 §2): the pyiceberg capture_snapshot read-back
       # (dags/load_*.py) uses type="rest" against /iceberg/ (pyiceberg 0.11.1 has no
       # native Nessie type). Nessie must know the warehouse name -> location mapping;
       # "warehouse" is the default so clients can omit the warehouse param.
       nessie.catalog.default-warehouse: warehouse
       nessie.catalog.warehouses.warehouse.location: s3://poc-warehouse/
+      # Server-side S3/MinIO credentials (EXE-02 blocker, RESOLVED): with the Iceberg
+      # REST catalog, NESSIE (not the client) reads the table metadata from the object
+      # store, so the S3 access key/secret must be configured server-side here. The
+      # client-side s3.* props in dags/config.py are NOT forwarded for the metadata
+      # read (the REST server does it). STATIC auth via a Quarkus basic-credentials
+      # secret (urn:nessie-secret:quarkus:...). Nessie >= 0.92 uses the
+      # default-options. segment. Values must match .env.example MinIO creds.
+      nessie.catalog.service.s3.default-options.auth-type: STATIC
+      nessie.catalog.service.s3.default-options.access-key: "urn:nessie-secret:quarkus:nessie-s3"
+      nessie-s3.name: ${MINIO_ROOT_USER:-pocadmin}
+      nessie-s3.secret: ${MINIO_ROOT_PASSWORD}
+      nessie.catalog.service.s3.default-options.endpoint: http://minio:9000
+      nessie.catalog.service.s3.default-options.path-style-access: "true"
+      nessie.catalog.service.s3.default-options.region: us-east-1
     volumes:
-      - nessie-data:/data
+      - nessie-data:/deployments/data
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/19120'"]
       interval: 10s
