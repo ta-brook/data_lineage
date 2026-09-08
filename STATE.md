@@ -1,6 +1,6 @@
 # POC State File — Resume Point
 
-**Last saved:** 2026-09-08 (session ID: `resume-2026-09-08`) — EXECUTION PHASE **COMPLETE**. The `capture_snapshot` S3-auth blocker (EXE-02) is **RESOLVED**; both DAGs (`load_orders`, `load_customers`) run to **SUCCESS** end-to-end (Spark load + snapshot read-back); the full lineage chain is verified in Marquez. Runbook steps 10/10b are DONE.
+**Last saved:** 2026-09-08 (session ID: `resume-2026-09-08b`) — EXECUTION PHASE **COMPLETE**; all tickets CLOSED. This session: (1) fixed the Airflow UI login redirect (browser was sent to the container-internal hostname), (2) investigated the user's request to "see the full MySQL→Iceberg lineage" and root-caused the ONE remaining graph gap: the Debezium SMT emits the WRONG Kafka output dataset (customers under the orders job; orders output never emitted). See Section 7 for the continuation.
 **Working dir:** `C:\Users\user\Documents\github\data_lineage`
 
 This file records exactly what is done and what remains. On resume, read this file first,
@@ -11,9 +11,9 @@ this file, (3) commit one commit per task per agent, (4) push to origin. This wo
 is codified in the `session-workflow` skill (`.opencode/skills/session-workflow/SKILL.md`).
 
 **HOW TO RESUME (next session):** read this file, then jump straight to **Section 7
-(RESUME HERE — REMAINING WORK)**. The pipeline is DONE and verified; remaining work is
-documentation reconciliation (spec 06/07 wording for the kafkaOffset facet and the
-MERGE columnLineage nuance) and closing the tickets.
+(RESUME HERE — REMAINING WORK)**. The pipeline is DONE and verified; the remaining work
+is (a) the Debezium SMT output-dataset misattribution (the only missing edge in the
+Marquez graph) and (b) the spec 06/07 documentation reconciliation.
 
 ---
 
@@ -32,6 +32,8 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 
 | Area | Status |
 |---|---|
+| **Airflow UI login redirect fixed** (`f1d70b7`): FAB builds the login URL from `api.base_url`; it was `http://airflow-webserver:8080` (container-internal) → browser "site can't reach". Now `AIRFLOW__API__BASE_URL=http://localhost:8080` (external) + `AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/` (internal, decouples task-runner→api-server). Verified: login URL = `http://localhost:8080/auth/login/`; `load_orders` still SUCCESS after the change | **DONE** |
+| **Full-lineage view investigated** (user asked "see full lineage MySQL→Iceberg"): Marquez graph is complete EXCEPT the `debezium → kafka://kafka:9092/mysql.shop.orders` edge. Root cause found (Section 7): Debezium OpenLineage SMT emits OUTPUT for `mysql.shop.customers` under the `debezium.shop-orders` job and NEVER for `mysql.shop.orders`; no `debezium.shop-customers` job exists | **DONE** (root-caused) |
 | **EXE-02 capture_snapshot S3-auth blocker RESOLVED**: Nessie (Iceberg REST server) needs S3 creds SERVER-SIDE to read table metadata from MinIO; client-side `s3.*` props are NOT forwarded for the metadata read | **DONE** |
 | Nessie compose: `nessie.catalog.service.s3.default-options.*` (auth-type=STATIC, access-key URN `urn:nessie-secret:quarkus:nessie-s3`, `nessie-s3.name/.secret`, endpoint, path-style, region) | **DONE** |
 | **Nessie RocksDB persistence fixed**: correct 0.108.4 key is `NESSIE_VERSION_STORE_PERSIST_ROCKS_DATABASE_PATH` (NOT `..._ROCKSDB_DB_PATH`, silently ignored → `/tmp` container layer); volume now mounted at `/deployments/data` (owned by nessie uid 10000; `/data` mount was root-owned → Permission denied) | **DONE** |
@@ -42,11 +44,12 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 | `load_customers` DAG = SUCCESS (snapshot_id 531130623126899358 in XCom) | **DONE** |
 | Marquez lineage chain verified: `debezium.shop-orders:mysql.0 → kafka://kafka:9092/mysql.shop.orders → airflow:load_orders.spark_load_orders (parent) → spark:load_orders (child) → replace_data → s3://poc-warehouse/poc/shop_orders_*`; columnLineage facet on replace_data output (all 9 fields); parent facet on spark run | **DONE** |
 | Stack healthy: 15 services up; connectors RUNNING; topics have data | **DONE** |
+| Tickets EXE-01 (#1), CDC-01 (#2), EXE-02 (#11) CLOSED via sync-tickets.ps1 (board fully closed) | **DONE** |
 
 ### Remaining work (next session — see Section 7)
 
-1. **Documentation reconciliation (spec 06/07)**: the `kafkaOffset` facet is NOT emitted by openlineage-spark 1.52.0 (no such facet class in the jar — verified); spec 06 review P2 says it IS emitted as a degenerate `[0,end]` range — that wording is wrong and must be corrected. Also the runbook (spec 07 step 10) expects `total_price = quantity * unit_price` exact lineage, but the openlineage-spark listener emits IDENTITY/DIRECT from the re-read target table for MERGE INTO — document this nuance.
-2. Close tickets EXE-01 (#1) + CDC-01 (#2) + EXE-02 (#11) via `sync-tickets.ps1`; update STATE.md and push.
+1. **Debezium SMT output-dataset misattribution** (the only missing edge in the Marquez graph): `debezium.shop-orders:mysql.0` emits OUTPUT `mysql.shop.customers` (wrong) and never `mysql.shop.orders`; no `debezium.shop-customers` job. Fix or accept+document (Section 7 has the analysis + candidate fixes).
+2. **Documentation reconciliation (spec 06/07)**: the `kafkaOffset` facet is NOT emitted by openlineage-spark 1.52.0 (no such facet class in the jar — verified); spec 06 review P2 says it IS emitted as a degenerate `[0,end]` range — that wording is wrong and must be corrected. Also the runbook (spec 07 step 10) expects `total_price = quantity * unit_price` exact lineage, but the openlineage-spark listener emits IDENTITY/DIRECT from the re-read target table for MERGE INTO — document this nuance.
 
 ---
 
@@ -67,11 +70,14 @@ All landed and PUSHED to origin (one commit per logical unit, matching repo styl
 | `aa9ae2a` | (prior session) Java 17 + capture_snapshot REST catalog (EXE-02) |
 | `5b03d24` | (prior session) fastavro 1.12 + ZonedTimestamp fixes (EXE-02) |
 | `0d2f6e2` | (prior session) PySpark driver/executor Python 3.11 alignment (EXE-02) |
-| *(this session)* | Nessie server-side S3 creds + RocksDB persistence fix (compose) — capture_snapshot blocker RESOLVED |
-| *(this session)* | Airflow OL spark-inject config (compose) — Airflow→Spark parentRun facet |
-| *(this session)* | Spark apps: CDC full-topic dedup by PK (MERGE_CARDINALITY_VIOLATION fix) |
+| `5947f55` | (this session) Nessie server-side S3 creds + RocksDB persistence + Airflow OL spark-inject (compose) — capture_snapshot blocker RESOLVED |
+| `93be531` | (this session) Spark apps: CDC full-topic dedup by PK (MERGE_CARDINALITY_VIOLATION fix) |
+| `b38aa73` | (this session) STATE.md execution-phase complete |
+| `905ad45` | (this session) tickets EXE-01/CDC-01/EXE-02 closed |
+| `f1d70b7` | (this session) Airflow UI login redirect fix (external api.base_url + internal execution_api_server_url) |
+| *(uncommitted)* | Debezium SMT output-misattribution investigation — NO code changes, findings in Section 7 |
 
-Git state: `main` at `c24ac8a` + 3 new commits (this session), pushed to `origin/main`.
+Git state: `main` at `f1d70b7`, pushed to `origin/main`, working tree clean.
 
 ---
 
@@ -176,6 +182,18 @@ Both DAGs run to **SUCCESS** end-to-end (verified 2026-09-08):
 
 ## 6. Known caveats (carry forward)
 
+- **Debezium SMT output-dataset misattribution (THE remaining graph gap, root-caused this
+  session)**: the `debezium.shop-orders:mysql.0` job emits OUTPUT `kafka://kafka:9092/mysql.shop.customers`
+  (WRONG — the orders connector never produces to the customers topic) and NEVER emits
+  OUTPUT for `mysql.shop.orders`. No `debezium.shop-customers` job exists at all — the
+  customers connector's OL events land under the orders job (shared `mysql-schema-history`
+  topic). Marquez DB confirms: orders job has INPUT for BOTH shop.orders AND shop.customers,
+  OUTPUT only for mysql.shop.customers (52 rows across all runs, incl. the current run).
+  Restarting both connectors did NOT fix it. The SMT (`io.debezium.transforms.openlineage.OpenLineage`
+  in debezium-connect-plugins-3.6.2.Final.jar) has `recentlySeenTopics`/`recentlySeenSchemas`
+  dedup caches + `lastEmissionTime`; connect logs show NO "Emitting running event for output
+  dataset" messages. Likely the DBZ-2262 dedup bug (known-topic/new-schema never re-emits)
+  combined with schema-history cross-talk. See Section 7 for candidate fixes.
 - **`cdc.cnf` is ignored** (world-writable on the Windows bind mount → MySQL refuses it):
   `server_id=1`, `gtid_mode=OFF` instead of spec's 223344/ON. CDC still works (binlog is
   ON with ROW/FULL by default) but drifts from spec 03/07. Needs a file-permission fix.
@@ -188,10 +206,6 @@ Both DAGs run to **SUCCESS** end-to-end (verified 2026-09-08):
   IDENTITY/DIRECT from the re-read target table, not `quantity * unit_price`. The facet is
   present and complete (all 9 fields) — the expression nuance is a listener limitation.
   Runbook step 10's "exact for the declarative SELECT" wording needs a caveat.
-- **shop-customers emits no own OpenLineage job on re-run** (its datasets appear under the
-  orders job via shared schema history) — data flow + topics work; two-connector OL
-  attribution needs a look. Also the Debezium OL events carry the MySQL input but NO Kafka
-  output dataset (the debezium → Kafka edge is missing in Marquez).
 - **Python UDF precision**: `confluent_from_avro` is inferred (not exact) lineage — this
   is by design (OQ5).
 - `jars/` and `__pycache__/` are gitignored (build caches).
@@ -200,7 +214,45 @@ Both DAGs run to **SUCCESS** end-to-end (verified 2026-09-08):
 
 ## 7. RESUME HERE — REMAINING WORK (next session)
 
-### The pipeline is DONE and verified. Remaining work is documentation + ticket close-out:
+### The pipeline is DONE and verified. Two workstreams remain:
+
+### A. Debezium SMT output-dataset misattribution (the only missing edge in the Marquez graph)
+
+**User-facing symptom:** in Marquez (http://localhost:3000) the graph shows
+`mysql://mysql:3306/shop.orders → debezium.shop-orders:mysql.0` (INPUT) and
+`kafka://kafka:9092/mysql.shop.orders → spark → s3://poc-warehouse/...` (complete), but the
+`debezium → kafka://kafka:9092/mysql.shop.orders` OUTPUT edge is missing — so the graph is
+two fragments, not one continuous MySQL→Iceberg line.
+
+**Root cause (verified this session):**
+- The Debezium OpenLineage SMT emits OUTPUT for `mysql.shop.customers` under the
+  `debezium.shop-orders` job (WRONG) and never for `mysql.shop.orders`.
+- No `debezium.shop-customers` job exists — the customers connector's OL events land under
+  the orders job (shared `mysql-schema-history` topic cross-talk).
+- Marquez DB (`job_versions_io_mapping`): orders job INPUT shop.orders + shop.customers,
+  OUTPUT mysql.shop.customers only (52 rows, every run incl. current).
+- Connector restart does NOT fix it. SMT has `recentlySeenTopics`/`recentlySeenSchemas`
+  dedup + `lastEmissionTime`; no "Emitting running event for output dataset" in connect logs.
+- Likely DBZ-2262 dedup bug (https://github.com/debezium/dbz/issues/2262): known-topic +
+  new-schema never re-emits; combined with schema-history cross-talk between the two
+  connectors sharing `mysql-schema-history`.
+
+**Candidate fixes (try in order):**
+1. **Give each connector its OWN schema-history topic** (`schema.history.internal.kafka.topic`
+   = `mysql-schema-history-orders` / `mysql-schema-history-customers`) — removes the
+   cross-talk that makes the orders connector see customers schemas. Restart both
+   connectors, check Marquez for a `debezium.shop-customers` job + orders OUTPUT.
+2. **Check the SMT emission condition in bytecode** (`javap` on
+   `io/debezium/transforms/openlineage/OpenLineage` in debezium-connect-plugins-3.6.2.Final.jar;
+   connect container has JDK 21 but no javap binary — use `python3` + `zipfile` string dump,
+   or copy the class out and javap on the host). Understand why orders OUTPUT never emits.
+3. **Accept + document**: the chain IS verifiable across the fragments (MySQL→debezium INPUT,
+   Kafka→Spark→Iceberg, Airflow parentRun, snapshot id in XCom). Downgrade the runbook
+   expectation to "the debezium→Kafka edge is a known Debezium SMT limitation in the POC".
+4. **Synthetic edge** (last resort, not recommended for a POC): POST a DatasetEvent linking
+   `debezium.shop-orders:mysql.0` → OUTPUT `kafka://kafka:9092/mysql.shop.orders` to Marquez.
+
+### B. Documentation reconciliation (spec 06/07)
 
 1. **Correct spec 06 review P2 + spec 07 step 10 wording** (poc-docs-writer):
    - kafkaOffset facet: "degenerate [0,end] range" → "NOT emitted by openlineage-spark
@@ -210,28 +262,22 @@ Both DAGs run to **SUCCESS** end-to-end (verified 2026-09-08):
    - MERGE columnLineage: note that `total_price` shows IDENTITY/DIRECT from the re-read
      target table, not `quantity * unit_price` (listener limitation for MERGE INTO).
    - Runbook step 10/10b expectations updated accordingly.
-2. **Close tickets** EXE-01 (#1), CDC-01 (#2), EXE-02 (#11) via
-   `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode close -Id <id>`
-   (EXE-02 is fully resolved; EXE-01 runbook steps 10/10b pass; CDC-01 was validated in a
-   prior session — the shop-customers OL attribution caveat is a follow-up, not a blocker).
-3. Update STATE.md and push.
+2. Update STATE.md and push.
 
 ### Optional follow-ups (not blockers):
 - Fix `cdc.cnf` file permissions (Windows bind mount world-writable) to restore
   `server_id=223344` / `gtid_mode=ON` per spec 03/07.
-- Investigate Debezium OL output dataset (Kafka topic) emission — the debezium → Kafka
-  edge is missing in Marquez.
-- Investigate shop-customers OL job attribution on re-run.
 
 ---
 
 ## 8. Ticket board
 
-- EXE-01 (#1, open) — bring up + run spec 07 runbook (**DONE: steps 10/10b pass**; not yet closed)
-- EXE-02 (#11, open) — resolve PySpark driver/executor Python version mismatch
-  (**RESOLVED + verified: both DAGs SUCCESS incl. capture_snapshot**; not yet closed)
-- CDC-01 (#2, open) — CDC hop lineage validation (**DONE in a prior session**; not yet closed)
+- EXE-01 (#1, **closed**) — bring up + run spec 07 runbook (steps 10/10b pass)
+- EXE-02 (#11, **closed**) — PySpark Python version mismatch (resolved + verified)
+- CDC-01 (#2, **closed**) — CDC hop lineage validation (done in a prior session)
 - T-01..CLN-02 (#3-#10, closed)
+- **Board fully closed.** If the Debezium SMT fix (Section 7A) is attempted, add a new
+  ticket (e.g. `CDC-02`) via pm-agent.
 
 Sync with: `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode sync`
 (requires `gh` auth; `gh` at `C:\Users\user\AppData\Local\Programs\gh\bin\gh.exe`)
