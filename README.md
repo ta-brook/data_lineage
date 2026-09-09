@@ -191,5 +191,6 @@ variable names); no env templates are committed.
 The `data-architecture` review output lives in `reports/` (each report ships as markdown
 plus a self-contained, human-readable HTML version):
 - `reports/mysql-gtid-timestamp-precision.{md,html}` — GTID microsecond source timestamps (DBZ-7183)
+- `reports/marquez-vs-design-lineage.{md,html}` — actual Marquez lineage vs the design diagram (`docs/diagrams/marquez-lineage.mmd`, regenerable via `scripts/extract-marquez-lineage.ps1`)
 - `reports/architecture-diagram.{md,html}` — ASCII architecture + lineage flow
 - `reports/architecture-review.{md,html}` · `reports/cdc-openlineage-review.{md,html}` · `reports/airflow-spark-iceberg-review.{md,html}`

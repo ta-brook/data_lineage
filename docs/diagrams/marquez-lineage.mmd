@@ -1,0 +1,112 @@
+flowchart LR
+    %% Marquez lineage graph — reconstructed from the Marquez metadata DB snapshot
+    %% taken 2026-09-09 (before Docker was stopped). Regenerate the exact graph with:
+    %%   powershell -ExecutionPolicy Bypass -File scripts/extract-marquez-lineage.ps1
+    %% Solid edges = dataset INPUT/OUTPUT edges recorded in job_versions_io_mapping
+    %% (current job versions). ParentRun (Airflow -> Spark) links are run facets, not
+    %% dataset edges, so they are NOT in this graph.
+
+    subgraph DS_0["mysql://mysql:3306"]
+        D_mysql__shop_orders["shop.orders"]
+        D_mysql__shop_customers["shop.customers"]
+    end
+    subgraph DS_1["kafka://kafka:9092"]
+        D_kafka__mysql_shop_orders["mysql.shop.orders"]
+        D_kafka__mysql_shop_customers["mysql.shop.customers"]
+        D_kafka__mysqljson_shop_orders["mysqljson.shop.orders"]
+        D_kafka__mysqljson_shop_customers["mysqljson.shop.customers"]
+    end
+    subgraph DS_2["s3://poc-warehouse"]
+        D_s3_poc_shop_orders["poc/shop_orders"]
+        D_s3_poc_shop_orders_26e0e822_3a32_4bb5_b962_9e263a3b0770["poc/shop_orders_26e0e822..."]
+        D_s3_poc_shop_orders_566d29a8_c0f6_4688_b618_5203ddd3fa84["poc/shop_orders_566d29a8..."]
+        D_s3_poc_shop_orders_73d1a76b_a01d_407b_b7b1_579dc4929268["poc/shop_orders_73d1a76b..."]
+        D_s3_poc_shop_orders_json_f5cb94d3_815c_4dc3_be51_6e2a293f4f68["poc/shop_orders_json_f5cb94d3..."]
+        D_s3_poc_shop_customers_97b98fa0_d38a_4125_8fc5_8a1980d89af8["poc/shop_customers_97b98fa0..."]
+        D_s3_poc_shop_customers_b15a6e94_d75b_4196_a09d_0ed508961d67["poc/shop_customers_b15a6e94..."]
+        D_s3_poc_shop_customers_d6c195a3_0e2a_403d_b568_83f614b4cf39["poc/shop_customers_d6c195a3..."]
+        D_s3_poc_shop_customers_json_71ca804a_2193_4acc_a3ae_8229feeb7fce["poc/shop_customers_json_71ca804a..."]
+    end
+
+    subgraph JB_0["jobs: debezium.shop-orders"]
+        J_debezium_shop_orders_mysql_0["mysql.0"]
+        J_debezium_shop_orders_mysql_orders["mysql.orders"]
+    end
+    subgraph JB_1["jobs: debezium.shop-customers"]
+        J_debezium_shop_customers_mysql_0["mysql.0"]
+        J_debezium_shop_customers_mysql_customers["mysql.customers"]
+    end
+    subgraph JB_2["jobs: airflow"]
+        J_airflow_load_orders["load_orders"]
+        J_airflow_load_orders_spark_load_orders["load_orders.spark_load_orders"]
+        J_airflow_load_orders_capture_snapshot["load_orders.capture_snapshot"]
+        J_airflow_load_customers["load_customers"]
+        J_airflow_load_customers_spark_load_customers["load_customers.spark_load_customers"]
+        J_airflow_load_orders_json["load_orders_json"]
+        J_airflow_load_orders_json_spark_load_orders_json["load_orders_json.spark_load_orders_json"]
+        J_airflow_load_customers_json["load_customers_json"]
+        J_airflow_load_customers_json_spark_load_customers_json["load_customers_json.spark_load_customers_json"]
+    end
+    subgraph JB_3["jobs: spark"]
+        J_spark_load_orders["load_orders"]
+        J_spark_load_orders_spark_load_orders_load_orders["load_orders.spark_load_orders.load_orders"]
+        J_spark_load_orders_replace_data_nessie_poc_shop_orders["load_orders.replace_data.nessie_poc_shop_orders"]
+        J_spark_load_orders_create_table_poc_shop_orders["load_orders.create_table.poc_shop_orders"]
+        J_spark_load_customers["load_customers"]
+        J_spark_load_customers_replace_data_nessie_poc_shop_customers["load_customers.replace_data.nessie_poc_shop_customers"]
+        J_spark_load_customers_create_table_poc_shop_customers["load_customers.create_table.poc_shop_customers"]
+        J_spark_load_orders_json["load_orders_json"]
+        J_spark_load_orders_json_replace_data_nessie_poc_shop_orders_json["load_orders_json.replace_data.nessie_poc_shop_orders_json"]
+        J_spark_load_orders_json_create_table_poc_shop_orders_json["load_orders_json.create_table.poc_shop_orders_json"]
+        J_spark_load_customers_json["load_customers_json"]
+        J_spark_load_customers_json_replace_data_nessie_poc_shop_customers_json["load_customers_json.replace_data.nessie_poc_shop_customers_json"]
+        J_spark_load_customers_json_create_table_poc_shop_customers_json["load_customers_json.create_table.poc_shop_customers_json"]
+    end
+
+    %% --- Avro orders chain (verified in DB) ---
+    D_mysql__shop_orders -->|INPUT| J_debezium_shop_orders_mysql_orders
+    J_debezium_shop_orders_mysql_0 -->|OUTPUT| D_kafka__mysql_shop_orders
+    D_kafka__mysql_shop_orders -->|INPUT| J_spark_load_orders_replace_data_nessie_poc_shop_orders
+    J_spark_load_orders_replace_data_nessie_poc_shop_orders -->|OUTPUT| D_s3_poc_shop_orders_26e0e822_3a32_4bb5_b962_9e263a3b0770
+    J_spark_load_orders_replace_data_nessie_poc_shop_orders -->|OUTPUT| D_s3_poc_shop_orders_566d29a8_c0f6_4688_b618_5203ddd3fa84
+    J_spark_load_orders_replace_data_nessie_poc_shop_orders -->|OUTPUT| D_s3_poc_shop_orders_73d1a76b_a01d_407b_b7b1_579dc4929268
+    J_spark_load_orders_create_table_poc_shop_orders -->|OUTPUT| D_s3_poc_shop_orders
+    J_spark_load_orders_create_table_poc_shop_orders -->|OUTPUT| D_s3_poc_shop_orders_26e0e822_3a32_4bb5_b962_9e263a3b0770
+
+    %% --- JSON orders chain (verified in DB) ---
+    D_kafka__mysqljson_shop_orders -->|INPUT| J_spark_load_orders_json_replace_data_nessie_poc_shop_orders_json
+    J_spark_load_orders_json_replace_data_nessie_poc_shop_orders_json -->|OUTPUT| D_s3_poc_shop_orders_json_f5cb94d3_815c_4dc3_be51_6e2a293f4f68
+    J_spark_load_orders_json_create_table_poc_shop_orders_json -->|OUTPUT| D_s3_poc_shop_orders_json_f5cb94d3_815c_4dc3_be51_6e2a293f4f68
+
+    %% --- Customers chains (mirror pattern; verify with extract script) ---
+    %% NB: the debezium.shop-customers:mysql.0 OUTPUT edge is ABSENT in Marquez
+    %% (Debezium emitter-cache collision routes customers OL events under
+    %% debezium.shop-orders — STATE.md §6). The customers Kafka->Spark->Iceberg
+    %% legs ARE present.
+    D_mysql__shop_customers -->|INPUT| J_debezium_shop_customers_mysql_customers
+    D_kafka__mysql_shop_customers -->|INPUT| J_spark_load_customers_replace_data_nessie_poc_shop_customers
+    J_spark_load_customers_replace_data_nessie_poc_shop_customers -->|OUTPUT| D_s3_poc_shop_customers_97b98fa0_d38a_4125_8fc5_8a1980d89af8
+    J_spark_load_customers_create_table_poc_shop_customers -->|OUTPUT| D_s3_poc_shop_customers_97b98fa0_d38a_4125_8fc5_8a1980d89af8
+    D_kafka__mysqljson_shop_customers -->|INPUT| J_spark_load_customers_json_replace_data_nessie_poc_shop_customers_json
+    J_spark_load_customers_json_replace_data_nessie_poc_shop_customers_json -->|OUTPUT| D_s3_poc_shop_customers_json_71ca804a_2193_4acc_a3ae_8229feeb7fce
+    J_spark_load_customers_json_create_table_poc_shop_customers_json -->|OUTPUT| D_s3_poc_shop_customers_json_71ca804a_2193_4acc_a3ae_8229feeb7fce
+
+    %% --- ParentRun links (run facets, NOT dataset edges) ---
+    J_airflow_load_orders_spark_load_orders -.->|parentRun| J_spark_load_orders
+    J_airflow_load_customers_spark_load_customers -.->|parentRun| J_spark_load_customers
+    J_airflow_load_orders_json_spark_load_orders_json -.->|parentRun| J_spark_load_orders_json
+    J_airflow_load_customers_json_spark_load_customers_json -.->|parentRun| J_spark_load_customers_json
+
+    classDef src fill:#1e88e5,stroke:#0d47a1,color:#fff
+    classDef cdc fill:#43a047,stroke:#1b5e20,color:#fff
+    classDef kaf fill:#fb8c00,stroke:#e65100,color:#fff
+    classDef air fill:#e53935,stroke:#b71c1c,color:#fff
+    classDef spk fill:#8e24aa,stroke:#4a148c,color:#fff
+    classDef ice fill:#00897b,stroke:#004d40,color:#fff
+
+    class D_mysql__shop_orders,D_mysql__shop_customers src
+    class J_debezium_shop_orders_mysql_0,J_debezium_shop_orders_mysql_orders,J_debezium_shop_customers_mysql_0,J_debezium_shop_customers_mysql_customers cdc
+    class D_kafka__mysql_shop_orders,D_kafka__mysql_shop_customers,D_kafka__mysqljson_shop_orders,D_kafka__mysqljson_shop_customers kaf
+    class J_airflow_load_orders,J_airflow_load_customers,J_airflow_load_orders_json,J_airflow_load_customers_json,J_airflow_load_orders_spark_load_orders,J_airflow_load_customers_spark_load_customers,J_airflow_load_orders_json_spark_load_orders_json,J_airflow_load_customers_json_spark_load_customers_json air
+    class J_spark_load_orders,J_spark_load_customers,J_spark_load_orders_json,J_spark_load_customers_json,J_spark_load_orders_replace_data_nessie_poc_shop_orders,J_spark_load_customers_replace_data_nessie_poc_shop_customers,J_spark_load_orders_json_replace_data_nessie_poc_shop_orders_json,J_spark_load_customers_json_replace_data_nessie_poc_shop_customers_json spk
+    class D_s3_poc_shop_orders,D_s3_poc_shop_orders_json_f5cb94d3_815c_4dc3_be51_6e2a293f4f68,D_s3_poc_shop_customers_97b98fa0_d38a_4125_8fc5_8a1980d89af8,D_s3_poc_shop_customers_json_71ca804a_2193_4acc_a3ae_8229feeb7fce ice
