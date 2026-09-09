@@ -83,7 +83,6 @@ Attached metadata. Minimum set for this POC:
 - `deployment` — environment/instance dimension (see below). Carried on every event.
 - `parentRun` — parent job/run reference on child (Spark) runs.
 - `sparkApplication` — Spark application id + version on Spark runs.
-- `kafkaOffset` — consumed offset range per partition on the Kafka→Spark leg.
 - `dataQuality` — (future) flags on output.
 
 ## Deployment & environment
@@ -127,6 +126,12 @@ lineage path is complete only within one `(instance_id, stack_epoch)`.
   transforms.
 - **Absence of a `columnLineage` facet on a Spark run means inferred, not exact.**
   Exactness is only claimed when the facet is present and complete (OQ5 RESOLVED).
+- **MERGE INTO caveat (review P2, spec 06/07):** the POC writes are `MERGE INTO`, and
+  the openlineage-spark 1.52.0 listener attributes output columns to the re-read target
+  table input as IDENTITY/DIRECT — `total_price` shows IDENTITY from
+  `s3://poc-warehouse/poc/shop_orders`, not the `quantity * unit_price` expression. The
+  `columnLineage` facet is still present and complete; the expression is not surfaced
+  (listener limitation for MERGE INTO).
 
 ## Version markers
 
@@ -134,7 +139,7 @@ lineage path is complete only within one `(instance_id, stack_epoch)`.
 |---|---|---|
 | MySQL → Debezium | binlog position | source state at read |
 | Debezium → Kafka | Kafka offset | position in topic |
-| Kafka → Spark | `kafkaOffset` facet (offset range per partition; checkpoint for streaming) | consumed position |
+| Kafka → Spark | Kafka offset (Debezium envelope / broker state — no OL facet; openlineage-spark 1.52.0 emits none) | consumed position |
 | Spark → Iceberg | Iceberg snapshot id | committed table version |
 | Spark (streaming only) | batch id | micro-batch identity |
 
@@ -151,19 +156,22 @@ markers of its runs.
   version facet, not a replacement marker — **deferred in the POC** (review D9: no
   artifact captures it; see spec 05 §5 / spec 06 risk row).
 
-**Rule:** the lineage chain closes when the Spark run carries the `kafkaOffset` facet
-(input) in Marquez **and** the Iceberg snapshot id (output) is recorded in Airflow run
-metadata (XCom/log) by the `capture_snapshot` read-back task, joined via the
-`parentRun` facet. The snapshot id is **not** attached to an OpenLineage event in the
-POC (OQ13 RESOLVED, spec 06): the chain closes across Marquez events + Airflow run
-metadata, not inside Marquez alone. A run missing either marker breaks the path.
+**Rule:** the lineage chain closes when the Iceberg snapshot id (output) is recorded in
+Airflow run metadata (XCom/log) by the `capture_snapshot` read-back task, joined via
+the `parentRun` facet. The Kafka offset marker — like the binlog position — lives in
+the Debezium envelope / broker state, not in an OL event (openlineage-spark 1.52.0
+emits no `kafkaOffset` facet). The snapshot id is **not** attached to an OpenLineage
+event in the POC (OQ13 RESOLVED, spec 06): the chain closes across Marquez events +
+Airflow run metadata, not inside Marquez alone. A run missing the snapshot id breaks
+the path.
 
 ## Lineage events / timeline
 
 All three hops emit to the **central OpenLineage store** — Marquez (deployment-facet
-`openlineage` endpoint). Per-hop metadata (e.g. the `kafkaOffset` facet) remains the
-fallback for facets Marquez does not render, but Marquez is the join point (OQ1
-RESOLVED).
+`openlineage` endpoint). Per-hop metadata (the binlog position and Kafka offset in the
+Debezium envelope / broker state; the Iceberg snapshot id in Airflow run metadata)
+remains the fallback for lineage markers no OL event carries, but Marquez is the join
+point (OQ1 RESOLVED).
 
 1. **Source ingest**: Debezium emits OpenLineage run events natively
    (START / RUNNING / COMPLETE / FAIL) to the OpenLineage backend, carrying the input
@@ -178,8 +186,8 @@ RESOLVED).
    to an OL event in the POC (OQ13 RESOLVED, spec 06). Column lineage is emitted by the
    Spark run (step 3).
 3. **Transform**: Spark app run → emits input/output datasets, `columnLineage` facet
-   (exact for declarative SQL), `kafkaOffset` facet, `sparkApplication` facet, and
-   `parentRun` facet linking to the Airflow run.
+   (exact for declarative SQL), `sparkApplication` facet, and `parentRun` facet
+   linking to the Airflow run.
 4. **Sink commit**: Iceberg snapshot created → lineage references the snapshot.
 
 ## Joining rules
