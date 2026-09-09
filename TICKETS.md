@@ -11,9 +11,10 @@ Conventions:
 
 | ID | Title | Agent label(s) | Phase | Priority | Status | GitHub |
 |---|---|---|---|---|---|---|
-| EXE-01 | Bring up the docker-compose stack and run the spec 07 validation runbook | agent:poc-orchestrator | execution | high | open | [#1](https://github.com/ta-brook/data_lineage/issues/1) |
-| EXE-02 | Resolve PySpark driver/executor Python version mismatch (blocker for EXE-01 runbook steps 10/10b) | agent:poc-orchestrator, agent:iceberg-expert | execution | high | open | [#11](https://github.com/ta-brook/data_lineage/issues/11) |
-| CDC-01 | Validate CDC hop lineage end-to-end (MySQL → Debezium → Kafka → Marquez) | agent:debezium-expert | cdc | high | open | [#2](https://github.com/ta-brook/data_lineage/issues/2) |
+| EXE-01 | Bring up the docker-compose stack and run the spec 07 validation runbook | agent:poc-orchestrator | execution | high | closed | [#1](https://github.com/ta-brook/data_lineage/issues/1) |
+| EXE-02 | Resolve PySpark driver/executor Python version mismatch (blocker for EXE-01 runbook steps 10/10b) | agent:poc-orchestrator, agent:iceberg-expert | execution | high | closed | [#11](https://github.com/ta-brook/data_lineage/issues/11) |
+| CDC-01 | Validate CDC hop lineage end-to-end (MySQL → Debezium → Kafka → Marquez) | agent:debezium-expert | cdc | high | closed | [#2](https://github.com/ta-brook/data_lineage/issues/2) |
+| CDC-02 | Fix Debezium OpenLineage SMT output-dataset misattribution (orders connector emits wrong OUTPUT dataset) | agent:debezium-expert | cdc | high | open | [#12](https://github.com/ta-brook/data_lineage/issues/12) |
 | T-01 | Switch Airflow + Spark OpenLineage transports from console to Marquez | agent:airflow-expert, agent:iceberg-expert | orchestration | medium | closed | [#3](https://github.com/ta-brook/data_lineage/issues/3) |
 | T-02 | Align Airflow Kafka dataset namespace to `kafka://kafka:9092` | agent:airflow-expert | orchestration | medium | closed | [#4](https://github.com/ta-brook/data_lineage/issues/4) |
 | HOP-01 | Implement Airflow → Spark → Iceberg hop end-to-end | agent:airflow-expert, agent:iceberg-expert | orchestration | high | closed | [#5](https://github.com/ta-brook/data_lineage/issues/5) |

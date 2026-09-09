@@ -143,6 +143,18 @@
                                    ],
                         "status":  "closed",
                         "github_number":  11
+                    },
+                    {
+                        "id":  "CDC-02",
+                        "title":  "Fix Debezium OpenLineage SMT output-dataset misattribution (orders connector emits wrong \"OUTPUT\" dataset)",
+                        "body":  "Symptom: In Marquez, the debezium.shop-orders:mysql.0 job emits OUTPUT kafka://kafka:9092/mysql.shop.customers (wrong) and never emits OUTPUT for mysql.shop.orders. No debezium.shop-customers job exists. The debezium-\u003eKafka edge is missing from the graph, so MySQL-\u003eIceberg lineage shows as two fragments.\n\nRoot cause (verified): the two connectors shared the mysql-schema-history Kafka topic, causing schema cross-talk; the SMT\u0027s recentlySeenTopics/recentlySeenSchemas dedup caches (likely DBZ-2262) then never re-emit the correct output dataset.\n\nFix being applied: per-connector schema-history topics (mysql-schema-history-orders / mysql-schema-history-customers) in provisioning/register-connectors.sh, then restart connectors and verify in Marquez that (a) a debezium.shop-customers job appears, (b) orders job emits OUTPUT kafka://kafka:9092/mysql.shop.orders.\n\nAcceptance criteria: Marquez graph shows the continuous MySQL-\u003eDebezium-\u003eKafka-\u003eSpark-\u003eIceberg chain; both debezium jobs exist with correct INPUT/OUTPUT datasets.\n\nOwner: debezium-expert. Ref: specs/03, provisioning/register-connectors.sh.",
+                        "labels":  [
+                                       "agent:debezium-expert",
+                                       "phase:cdc",
+                                       "priority:high"
+                                   ],
+                        "status":  "open",
+                        "github_number":  12
                     }
                 ]
 }
