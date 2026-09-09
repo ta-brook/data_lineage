@@ -55,6 +55,7 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 | **Kafbat Kafka UI added** (`docker-compose.cdc.yml`): `kafka-ui` service (ghcr.io/kafbat/kafka-ui) at http://localhost:8090, wired to cluster + Schema Registry. NOTE: the env var is `KAFKA_CLUSTERS_0_SCHEMAREGISTRY` — the `...URL` variant is silently ignored in Kafbat v1.5.0 (the Avro serde never registers, messages render as raw bytes). Message browser now decodes Debezium Confluent Avro | **DONE** |
 | **MySQL GTID source-timestamp precision (DBZ-7183) verified**: `source.ts_ms/ts_us` now carry microsecond GTID commit times (`source.ts_ns` micro-derived), `source.gtid` populated. Root cause: `gtid_mode=OFF` because `cdc.cnf` is ignored (world-writable Windows bind mount). Fix: mysql `command:` flags in BOTH compose files + connector offset reset/recreate. Verification report: `reports/mysql-gtid-timestamp-precision.{md,html}` | **DONE** |
 | **JSON-format pipeline path added** (parallel to Avro): connectors `shop-orders-json`/`shop-customers-json` (JsonConverter, `schemas.enable=false`, `decimal.handling.mode=string`) → topics `mysqljson.shop.orders`/`mysqljson.shop.customers`; Spark apps `load_orders_json`/`load_customers_json` (`from_json`, no registry) → Iceberg `poc.shop_orders_json`/`poc.shop_customers_json`; DAGs `load_orders_json`/`load_customers_json`. Verified end-to-end: DAGs SUCCESS, tables populated (orders 7 rows w/ correct `total_price`; customers 4 rows), Marquez shows kafka:// input datasets + `replace_data`/`create_table` output jobs. Files: `provisioning/register-connectors.sh`, `spark-apps/load_*_json.py`, `dags/load_*_json.py`, `dags/config.py` | **DONE** |
+| **Docs/diagrams added** (no docker): README overhaul + colored Mermaid pipeline diagram (`README.md`, `docs/diagrams/pipeline.mmd`); Marquez-lineage diagram + reproducible extractor (`docs/diagrams/marquez-lineage.mmd`, `scripts/extract-marquez-lineage.ps1`); comparison report `reports/marquez-vs-design-lineage.{md,html}` (actual Marquez vs design — differences: Airflow segment is parentRun-facet only, customers debezium edge missing, JSON debezium hop absent by design, Iceberg outputs are physical snapshot paths); spec 00/04/05/07 reconciled | **DONE** |
 
 ### Remaining work (next session — see Section 7)
 
@@ -94,9 +95,18 @@ All landed and PUSHED to origin (one commit per logical unit, matching repo styl
 | `b38aa73` | (this session) STATE.md execution-phase complete |
 | `905ad45` | (this session) tickets EXE-01/CDC-01/EXE-02 closed |
 | `f1d70b7` | (this session) Airflow UI login redirect fix (external api.base_url + internal execution_api_server_url) |
-| *(uncommitted)* | Debezium SMT output-misattribution investigation — NO code changes, findings in Section 7 |
+| `9de3652` | (2026-09-09, this session) MySQL GTID microsecond source ts (DBZ-7183) + Kafbat UI + report |
+| `a81d6bc` | (2026-09-09) docs(state): GTID microsecond source ts + Kafbat UI session record |
+| `773d084` | (2026-09-09) JSON-format Debezium connectors (JsonConverter, payload-only) + spec 03 |
+| `fb12af0` | (2026-09-09) JSON-path Spark apps (from_json) → shop_*_json tables |
+| `5f3dbfa` | (2026-09-09) JSON-path DAGs load_orders_json/load_customers_json + config |
+| `4625cf8` | (2026-09-09) docs(state): JSON-format pipeline path session record |
+| `015ddf6` | (2026-09-09) README overhaul + colored Mermaid pipeline diagram + docs/diagrams |
+| `672e49c` | (2026-09-09) docs(specs): JSON path, kafka-ui, GTID command flags (00/04/05/07) |
+| `01fae7c` | (2026-09-09) Marquez lineage diagram + extractor script + comparison report |
 
-Git state: `main` at `f1d70b7`, pushed to `origin/main`, working tree clean.
+Git state: `main` at `01fae7c`, pushed to `origin/main`, working tree clean.
+**Docker is currently STOPPED** (Docker Desktop not running as of the last session action).
 
 ---
 
