@@ -1,6 +1,6 @@
 # POC State File — Resume Point
 
-**Last saved:** 2026-09-08 (session ID: `resume-2026-09-08b`) — EXECUTION PHASE **COMPLETE**; all tickets CLOSED. This session: (1) fixed the Airflow UI login redirect (browser was sent to the container-internal hostname), (2) investigated the user's request to "see the full MySQL→Iceberg lineage" and root-caused the ONE remaining graph gap: the Debezium SMT emits the WRONG Kafka output dataset (customers under the orders job; orders output never emitted). See Section 7 for the continuation.
+**Last saved:** 2026-09-09 (session ID: `resume-2026-09-09`) — CDC-02 fix AUTHORED + spec 02/04/05/06/07 reconciled; fix NOT yet applied to the running stack. This session: (1) created ticket CDC-02 (#12) for the Debezium SMT output-dataset misattribution, (2) completed the per-connector schema-history fix in `provisioning/register-connectors.sh` (debezium-expert; also fixed a latent bug — `#` comments had been added INSIDE the JSON payload strings, which would have broken registration with HTTP 400), (3) reconciled the `kafkaOffset` facet + MERGE columnLineage wording across specs 02/04/05/06/07 (poc-docs-writer + lineage-designer). See Section 7 for the continuation.
 **Working dir:** `C:\Users\user\Documents\github\data_lineage`
 
 This file records exactly what is done and what remains. On resume, read this file first,
@@ -11,9 +11,9 @@ this file, (3) commit one commit per task per agent, (4) push to origin. This wo
 is codified in the `session-workflow` skill (`.opencode/skills/session-workflow/SKILL.md`).
 
 **HOW TO RESUME (next session):** read this file, then jump straight to **Section 7
-(RESUME HERE — REMAINING WORK)**. The pipeline is DONE and verified; the remaining work
-is (a) the Debezium SMT output-dataset misattribution (the only missing edge in the
-Marquez graph) and (b) the spec 06/07 documentation reconciliation.
+(RESUME HERE — REMAINING WORK)**. The pipeline is DONE and verified; the CDC-02 fix is
+AUTHORED but NOT yet applied to the running stack (needs connector delete + re-register
++ Marquez verification).
 
 ---
 
@@ -48,8 +48,18 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 
 ### Remaining work (next session — see Section 7)
 
-1. **Debezium SMT output-dataset misattribution** (the only missing edge in the Marquez graph): `debezium.shop-orders:mysql.0` emits OUTPUT `mysql.shop.customers` (wrong) and never `mysql.shop.orders`; no `debezium.shop-customers` job. Fix or accept+document (Section 7 has the analysis + candidate fixes).
-2. **Documentation reconciliation (spec 06/07)**: the `kafkaOffset` facet is NOT emitted by openlineage-spark 1.52.0 (no such facet class in the jar — verified); spec 06 review P2 says it IS emitted as a degenerate `[0,end]` range — that wording is wrong and must be corrected. Also the runbook (spec 07 step 10) expects `total_price = quantity * unit_price` exact lineage, but the openlineage-spark listener emits IDENTITY/DIRECT from the re-read target table for MERGE INTO — document this nuance.
+1. **Apply the CDC-02 fix to the RUNNING stack and verify in Marquez**: the per-connector
+   schema-history fix is authored in `provisioning/register-connectors.sh` but only takes
+   effect on fresh bring-up or after DELETE + re-register of both connectors (the script
+   only POSTs; 409 = already present). Runbook note added to spec 07 §6 with the exact
+   `curl -X DELETE` commands. Then verify: (a) a `debezium.shop-customers` job appears,
+   (b) orders job emits OUTPUT `kafka://kafka:9092/mysql.shop.orders`, (c) the Marquez
+   graph shows one continuous MySQL→Iceberg chain.
+2. **Optional follow-ups**: `cdc.cnf` file permissions (Windows bind mount world-writable);
+   `runbook-testing.html` (repo root) still lists the shared `mysql-schema-history` topic
+   in step 4; latent `sync-tickets.ps1` bug — `New-Issue`/`Find-IssueNumber` assign
+   `$t.github_number` on the PSCustomObject, which throws if a new manifest entry lacks
+   the property (workaround: add `"github_number": null` before syncing; candidate CLN-03).
 
 ---
 
