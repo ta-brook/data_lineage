@@ -1,6 +1,6 @@
 # POC State File — Resume Point
 
-**Last saved:** 2026-09-09 (session ID: `resume-2026-09-09`) — CDC-02 fix AUTHORED + spec 02/04/05/06/07 reconciled; fix NOT yet applied to the running stack. This session: (1) created ticket CDC-02 (#12) for the Debezium SMT output-dataset misattribution, (2) completed the per-connector schema-history fix in `provisioning/register-connectors.sh` (debezium-expert; also fixed a latent bug — `#` comments had been added INSIDE the JSON payload strings, which would have broken registration with HTTP 400), (3) reconciled the `kafkaOffset` facet + MERGE columnLineage wording across specs 02/04/05/06/07 (poc-docs-writer + lineage-designer). See Section 7 for the continuation.
+**Last saved:** 2026-09-09 (session ID: `resume-2026-09-09b`) — CDC-02 fix APPLIED to the running stack; orders chain fully correct in Marquez; customers debezium-hop attribution remains a known Debezium SMT limitation. This session: (1) brought the stack back up (was shut down), (2) applied the CDC-02 per-connector schema-history fix to the running stack (DELETE + re-register + offset reset), (3) discovered the REAL root cause of the cross-talk — a STATIC emitter cache in `DebeziumOpenLineageEmitter` keyed by `{connectorLogicalName}:{taskId}` = `mysql:0` for both connectors (NOT schema history), (4) tried a `task.id` per-connector fix — it NPE'd the SMT (header taskId is hardcoded "0" from `CdcSourceTaskContext`, mismatching the config-derived key) and was REVERTED, (5) restored the working state: orders chain `mysql.shop.orders → debezium.shop-orders:mysql.0 → kafka://kafka:9092/mysql.shop.orders` verified; user confirmed the lineage is visible in Marquez (Table Level, `mysql://mysql:3306/shop.orders`). See Section 7 for the continuation.
 **Working dir:** `C:\Users\user\Documents\github\data_lineage`
 
 This file records exactly what is done and what remains. On resume, read this file first,
@@ -11,9 +11,10 @@ this file, (3) commit one commit per task per agent, (4) push to origin. This wo
 is codified in the `session-workflow` skill (`.opencode/skills/session-workflow/SKILL.md`).
 
 **HOW TO RESUME (next session):** read this file, then jump straight to **Section 7
-(RESUME HERE — REMAINING WORK)**. The pipeline is DONE and verified; the CDC-02 fix is
-AUTHORED but NOT yet applied to the running stack (needs connector delete + re-register
-+ Marquez verification).
+(RESUME HERE — REMAINING WORK)**. The pipeline is DONE and verified; the stack is UP in
+the working state (orders chain fully correct in Marquez). Remaining: the customers
+debezium-hop attribution (emitter-cache collision — needs a separate Connect worker or a
+Debezium fix) + optional follow-ups.
 
 ---
 
@@ -32,6 +33,12 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 
 | Area | Status |
 |---|---|
+| **Stack brought back up** (was shut down ~13h): `docker compose up -d`; 15 services healthy; connectors auto-started with the OLD shared `mysql-schema-history` config (Connect config persisted in Kafka) | **DONE** |
+| **CDC-02 fix APPLIED to the running stack**: DELETE both connectors → re-run `provision` gate (HTTP 201) → reset connector offsets (KIP-875 `DELETE /connectors/{name}/offsets`; needed because the new schema-history topics didn't exist and stale offsets referenced the old topic → "db history topic is missing") → resume. Both connectors RUNNING with per-connector schema-history topics (`mysql-schema-history-orders` / `mysql-schema-history-customers`); re-snapshot produced data (orders 10 msgs, customers 5 msgs) | **DONE** |
+| **Orders chain now FULLY CORRECT in Marquez**: `debezium.shop-orders:mysql.0` emits INPUT `shop.orders` + OUTPUT `kafka://kafka:9092/mysql.shop.orders` (verified in `lineage_events` + `job_versions_io_mapping`). The `debezium → kafka` edge that was missing is now present | **DONE** |
+| **REAL root cause of the cross-talk found (bytecode + source verified)**: `DebeziumOpenLineageEmitter` has a **STATIC** `ConcurrentHashMap<String, LineageEmitter> emitters` cache keyed by `ConnectorContext.toEmitterKey()` = `String.format("%s:%s", connectorLogicalName, taskId)`. Both connectors share `topic.prefix=mysql` + `taskId=0` → key `mysql:0` → the FIRST connector to init (orders) creates the emitter with ITS namespace; the customers connector REUSES it → all its events carry `debezium.shop-orders`. The schema-history isolation fixed the orders connector's dataset attribution but NOT the emitter collision | **DONE** (root-caused) |
+| **`task.id` per-connector fix TRIED and REVERTED**: setting `task.id=orders/customers` makes the emitter keys differ (`mysql:orders`/`mysql:customers`) and the native-integration events carry the correct namespaces — BUT the SMT then NPEs: the SMT derives its context from record HEADERS (`ConnectorContext.from(Headers)`, config=null) and the header `__debezium.context.taskId` is hardcoded "0" (written by `DebeziumHeaderProducer` from `CdcSourceTaskContext.getTaskId()`, NOT the config) → SMT key `mysql:0` ≠ native key `mysql:orders` → `getEmitter` misses → `init()` → `DebeziumOpenLineageConfiguration.from(context)` → `context.config()` null → NPE → both tasks killed. REVERTED to default task.id; connectors restored to RUNNING | **DONE** (experiment, reverted) |
+| **Working state restored + verified**: after revert, `debezium.shop-orders:mysql.0` emits INPUT `shop.orders` + OUTPUT `mysql.shop.orders` again (SMT works, keys match at `mysql:0`); user confirmed the lineage is visible in Marquez (Table Level, `mysql://mysql:3306/shop.orders`) | **DONE** |
 | **Airflow UI login redirect fixed** (`f1d70b7`): FAB builds the login URL from `api.base_url`; it was `http://airflow-webserver:8080` (container-internal) → browser "site can't reach". Now `AIRFLOW__API__BASE_URL=http://localhost:8080` (external) + `AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/` (internal, decouples task-runner→api-server). Verified: login URL = `http://localhost:8080/auth/login/`; `load_orders` still SUCCESS after the change | **DONE** |
 | **Full-lineage view investigated** (user asked "see full lineage MySQL→Iceberg"): Marquez graph is complete EXCEPT the `debezium → kafka://kafka:9092/mysql.shop.orders` edge. Root cause found (Section 7): Debezium OpenLineage SMT emits OUTPUT for `mysql.shop.customers` under the `debezium.shop-orders` job and NEVER for `mysql.shop.orders`; no `debezium.shop-customers` job exists | **DONE** (root-caused) |
 | **EXE-02 capture_snapshot S3-auth blocker RESOLVED**: Nessie (Iceberg REST server) needs S3 creds SERVER-SIDE to read table metadata from MinIO; client-side `s3.*` props are NOT forwarded for the metadata read | **DONE** |
@@ -48,13 +55,12 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 
 ### Remaining work (next session — see Section 7)
 
-1. **Apply the CDC-02 fix to the RUNNING stack and verify in Marquez**: the per-connector
-   schema-history fix is authored in `provisioning/register-connectors.sh` but only takes
-   effect on fresh bring-up or after DELETE + re-register of both connectors (the script
-   only POSTs; 409 = already present). Runbook note added to spec 07 §6 with the exact
-   `curl -X DELETE` commands. Then verify: (a) a `debezium.shop-customers` job appears,
-   (b) orders job emits OUTPUT `kafka://kafka:9092/mysql.shop.orders`, (c) the Marquez
-   graph shows one continuous MySQL→Iceberg chain.
+1. **Customers debezium-hop attribution** (the emitter-cache collision): the customers
+   connector's OL events still land under `debezium.shop-orders` (static emitter cache
+   keyed `mysql:0`). Candidate fixes: (a) run each connector in a SEPARATE Connect worker
+   (separate JVM → separate static cache; preserves all identities), (b) upgrade Debezium
+   when the emitter-key bug is fixed upstream, (c) accept + document (the customers chain
+   IS visible via the orders job node + the Kafka→Spark→Iceberg leg is correct).
 2. **Optional follow-ups**: `cdc.cnf` file permissions (Windows bind mount world-writable);
    `runbook-testing.html` (repo root) still lists the shared `mysql-schema-history` topic
    in step 4; latent `sync-tickets.ps1` bug — `New-Issue`/`Find-IssueNumber` assign
@@ -192,18 +198,22 @@ Both DAGs run to **SUCCESS** end-to-end (verified 2026-09-08):
 
 ## 6. Known caveats (carry forward)
 
-- **Debezium SMT output-dataset misattribution (THE remaining graph gap, root-caused this
-  session)**: the `debezium.shop-orders:mysql.0` job emits OUTPUT `kafka://kafka:9092/mysql.shop.customers`
-  (WRONG — the orders connector never produces to the customers topic) and NEVER emits
-  OUTPUT for `mysql.shop.orders`. No `debezium.shop-customers` job exists at all — the
-  customers connector's OL events land under the orders job (shared `mysql-schema-history`
-  topic). Marquez DB confirms: orders job has INPUT for BOTH shop.orders AND shop.customers,
-  OUTPUT only for mysql.shop.customers (52 rows across all runs, incl. the current run).
-  Restarting both connectors did NOT fix it. The SMT (`io.debezium.transforms.openlineage.OpenLineage`
-  in debezium-connect-plugins-3.6.2.Final.jar) has `recentlySeenTopics`/`recentlySeenSchemas`
-  dedup caches + `lastEmissionTime`; connect logs show NO "Emitting running event for output
-  dataset" messages. Likely the DBZ-2262 dedup bug (known-topic/new-schema never re-emits)
-  combined with schema-history cross-talk. See Section 7 for candidate fixes.
+- **Debezium emitter-cache collision (THE remaining graph gap — root cause now FULLY
+  verified, this session)**: `DebeziumOpenLineageEmitter` (debezium-openlineage-api
+  3.6.2.Final) keeps a **STATIC** `ConcurrentHashMap<String, LineageEmitter> emitters`
+  keyed by `ConnectorContext.toEmitterKey()` = `String.format("%s:%s", connectorLogicalName,
+  taskId)`. Both connectors share `topic.prefix=mysql` + `taskId=0` → key `mysql:0` → the
+  first connector to init (orders) creates the emitter with ITS namespace; the customers
+  connector REUSES it → its INPUT/OUTPUT events carry `debezium.shop-orders`. The
+  per-connector schema-history fix (CDC-02) removed the schema cross-talk and the orders
+  chain is now FULLY correct (`debezium.shop-orders:mysql.0` → INPUT `shop.orders` →
+  OUTPUT `kafka://kafka:9092/mysql.shop.orders`), but the customers connector's events
+  still land under the orders job. **`task.id` per-connector does NOT fix it**: the SMT
+  derives its context from record headers and the header `__debezium.context.taskId` is
+  hardcoded "0" (from `CdcSourceTaskContext.getTaskId()`, not the config) → key mismatch →
+  `init()` NPEs on `context.config()==null` → tasks killed (observed + reverted). Real
+  fixes: separate Connect worker per connector (separate JVM → separate static cache) or
+  upstream Debezium fix. DBZ-2262 (dedup) is a separate, secondary SMT defect.
 - **`cdc.cnf` is ignored** (world-writable on the Windows bind mount → MySQL refuses it):
   `server_id=1`, `gtid_mode=OFF` instead of spec's 223344/ON. CDC still works (binlog is
   ON with ROW/FULL by default) but drifts from spec 03/07. Needs a file-permission fix.
@@ -224,59 +234,41 @@ Both DAGs run to **SUCCESS** end-to-end (verified 2026-09-08):
 
 ## 7. RESUME HERE — REMAINING WORK (next session)
 
-### The pipeline is DONE and verified. Two workstreams remain:
+### The pipeline is DONE and verified. The stack is UP in the working state.
 
-### A. Debezium SMT output-dataset misattribution (the only missing edge in the Marquez graph)
+### A. Customers debezium-hop attribution (the emitter-cache collision)
 
-**User-facing symptom:** in Marquez (http://localhost:3000) the graph shows
-`mysql://mysql:3306/shop.orders → debezium.shop-orders:mysql.0` (INPUT) and
-`kafka://kafka:9092/mysql.shop.orders → spark → s3://poc-warehouse/...` (complete), but the
-`debezium → kafka://kafka:9092/mysql.shop.orders` OUTPUT edge is missing — so the graph is
-two fragments, not one continuous MySQL→Iceberg line.
+**Current state (verified this session):** the orders chain is FULLY correct in Marquez:
+`mysql://mysql:3306/shop.orders → debezium.shop-orders:mysql.0 → kafka://kafka:9092/mysql.shop.orders
+→ airflow:load_orders → spark:load_orders → s3://poc-warehouse/poc/shop_orders_*`. The user
+confirmed the lineage is visible in the Marquez UI (Table Level, `mysql://mysql:3306/shop.orders`).
 
-**Root cause (verified this session):**
-- The Debezium OpenLineage SMT emits OUTPUT for `mysql.shop.customers` under the
-  `debezium.shop-orders` job (WRONG) and never for `mysql.shop.orders`.
-- No `debezium.shop-customers` job exists — the customers connector's OL events land under
-  the orders job (shared `mysql-schema-history` topic cross-talk).
-- Marquez DB (`job_versions_io_mapping`): orders job INPUT shop.orders + shop.customers,
-  OUTPUT mysql.shop.customers only (52 rows, every run incl. current).
-- Connector restart does NOT fix it. SMT has `recentlySeenTopics`/`recentlySeenSchemas`
-  dedup + `lastEmissionTime`; no "Emitting running event for output dataset" in connect logs.
-- Likely DBZ-2262 dedup bug (https://github.com/debezium/dbz/issues/2262): known-topic +
-  new-schema never re-emits; combined with schema-history cross-talk between the two
-  connectors sharing `mysql-schema-history`.
+**Remaining gap:** the customers connector's OL events (INPUT `shop.customers`, OUTPUT
+`mysql.shop.customers`) land under the `debezium.shop-orders` job because of the STATIC
+emitter cache keyed `mysql:0` (see Section 6). The customers Kafka→Spark→Iceberg leg is
+correct; only the debezium-hop attribution is off.
 
 **Candidate fixes (try in order):**
-1. **Give each connector its OWN schema-history topic** (`schema.history.internal.kafka.topic`
-   = `mysql-schema-history-orders` / `mysql-schema-history-customers`) — removes the
-   cross-talk that makes the orders connector see customers schemas. Restart both
-   connectors, check Marquez for a `debezium.shop-customers` job + orders OUTPUT.
-2. **Check the SMT emission condition in bytecode** (`javap` on
-   `io/debezium/transforms/openlineage/OpenLineage` in debezium-connect-plugins-3.6.2.Final.jar;
-   connect container has JDK 21 but no javap binary — use `python3` + `zipfile` string dump,
-   or copy the class out and javap on the host). Understand why orders OUTPUT never emits.
-3. **Accept + document**: the chain IS verifiable across the fragments (MySQL→debezium INPUT,
-   Kafka→Spark→Iceberg, Airflow parentRun, snapshot id in XCom). Downgrade the runbook
-   expectation to "the debezium→Kafka edge is a known Debezium SMT limitation in the POC".
-4. **Synthetic edge** (last resort, not recommended for a POC): POST a DatasetEvent linking
-   `debezium.shop-orders:mysql.0` → OUTPUT `kafka://kafka:9092/mysql.shop.orders` to Marquez.
+1. **Separate Connect worker per connector** (e.g. `connect-customers` service in
+   docker-compose, each with its own plugin path + OL config): separate JVM → separate
+   static emitter cache → each connector emits under its own namespace. Preserves ALL
+   lineage identities (`mysql.0` job names, topic names, namespaces). Heavier deployment
+   change but the only config-level fix that works.
+2. **Upstream Debezium fix**: the emitter key should include the namespace (or the SMT
+   should not NPE when the emitter is missing). Track DBZ issues; upgrade when fixed.
+3. **Accept + document**: the customers chain IS visible (via the orders job node + the
+   correct Kafka→Spark→Iceberg leg). Downgrade the runbook expectation to "the customers
+   debezium-hop attribution is a known Debezium SMT limitation in the POC".
 
-### B. Documentation reconciliation (spec 06/07)
+### B. Optional follow-ups (not blockers)
 
-1. **Correct spec 06 review P2 + spec 07 step 10 wording** (poc-docs-writer):
-   - kafkaOffset facet: "degenerate [0,end] range" → "NOT emitted by openlineage-spark
-     1.52.0 (no such facet class in the jar); the Kafka offset marker lives in the
-     Debezium envelope / broker state; the version-marker chain closes via the Iceberg
-     snapshot id (capture_snapshot XCom) + the parentRun facet".
-   - MERGE columnLineage: note that `total_price` shows IDENTITY/DIRECT from the re-read
-     target table, not `quantity * unit_price` (listener limitation for MERGE INTO).
-   - Runbook step 10/10b expectations updated accordingly.
-2. Update STATE.md and push.
-
-### Optional follow-ups (not blockers):
 - Fix `cdc.cnf` file permissions (Windows bind mount world-writable) to restore
   `server_id=223344` / `gtid_mode=ON` per spec 03/07.
+- `runbook-testing.html` (repo root) still lists the shared `mysql-schema-history` topic
+  in step 4 — regenerate/clean up.
+- Latent `sync-tickets.ps1` bug: `New-Issue`/`Find-IssueNumber` assign `$t.github_number`
+  on the PSCustomObject, which throws if a new manifest entry lacks the property
+  (workaround: add `"github_number": null` before syncing; candidate CLN-03 ticket).
 
 ---
 
@@ -286,8 +278,11 @@ two fragments, not one continuous MySQL→Iceberg line.
 - EXE-02 (#11, **closed**) — PySpark Python version mismatch (resolved + verified)
 - CDC-01 (#2, **closed**) — CDC hop lineage validation (done in a prior session)
 - T-01..CLN-02 (#3-#10, closed)
-- **Board fully closed.** If the Debezium SMT fix (Section 7A) is attempted, add a new
-  ticket (e.g. `CDC-02`) via pm-agent.
+- **CDC-02 (#12, OPEN)** — Debezium SMT output-dataset misattribution. PARTIALLY resolved:
+  the per-connector schema-history fix is applied and the orders chain is fully correct;
+  the customers debezium-hop attribution remains (emitter-cache collision — see Section
+  7A). Keep open until the customers attribution is fixed (separate Connect worker) or
+  accepted as a documented limitation.
 
 Sync with: `powershell -ExecutionPolicy Bypass -File scripts/sync-tickets.ps1 -Mode sync`
 (requires `gh` auth; `gh` at `C:\Users\user\AppData\Local\Programs\gh\bin\gh.exe`)
