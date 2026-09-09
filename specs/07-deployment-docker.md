@@ -360,9 +360,14 @@ docker compose exec airflow-webserver airflow dags trigger load_orders
 #         -> kafka://kafka:9092/mysql.shop.orders
 #         -> airflow:load_orders.spark_load_orders (parent)
 #         -> spark:load_orders (child, run of record)
-#     expect: columnLineage facet on the Spark run (exact for the declarative SELECT;
-#             total_price = quantity * unit_price), kafkaOffset facet, snapshot id
-#             captured by capture_snapshot (xcom snapshot_id)
+#     expect: columnLineage facet on the Spark run, present and complete (all fields);
+#             the write is a MERGE INTO, so the listener attributes output columns as
+#             IDENTITY/DIRECT from the re-read target table input - total_price shows
+#             IDENTITY from s3://poc-warehouse/poc/shop_orders, not the
+#             quantity * unit_price expression (listener limitation for MERGE INTO);
+#             no kafkaOffset facet is emitted (openlineage-spark 1.52.0 has none) - the
+#             Kafka offset marker lives in the Debezium envelope / broker state;
+#             snapshot id captured by capture_snapshot (xcom snapshot_id)
 
 # 10b. Repeat for the customers dataset (acceptance criteria cover both tables):
 docker compose exec airflow-webserver airflow dags trigger load_customers
@@ -372,8 +377,9 @@ docker compose exec airflow-webserver airflow dags trigger load_customers
 #         -> kafka://kafka:9092/mysql.shop.customers
 #         -> airflow:load_customers.spark_load_customers (parent)
 #         -> spark:load_customers (child, run of record)
-#     expect: columnLineage facet (1:1 passthrough), kafkaOffset facet, snapshot id
-#             captured by capture_snapshot (xcom snapshot_id)
+#     expect: columnLineage facet (1:1 passthrough), snapshot id captured by
+#             capture_snapshot (xcom snapshot_id); no kafkaOffset facet is emitted
+#             (see step 10)
 ```
 
 Acceptance criteria map to the lineage model (spec 02): topic names

@@ -15,7 +15,10 @@ designed metadata:
 3. **Precision honesty**: every job run declares exact vs. inferred lineage; no run
    overclaims. Absence of a columnLineage facet = inferred.
 4. **Version markers complete**: each leg of the lineage chain has a marker (binlog
-   position, Kafka offset / kafkaOffset facet, Iceberg snapshot id).
+   position in the Debezium envelope, Kafka offset in the Debezium envelope / broker
+   state, Iceberg snapshot id in Airflow run metadata). No `kafkaOffset` facet is
+   emitted by the pinned openlineage-spark agent (review P2); the chain closes via the
+   snapshot id + `parentRun` facet.
 5. **Component feasibility**: every hop's spec emits exactly the metadata the lineage
    model requires — no spec requires metadata another spec says is unavailable.
 6. **Runnable stack**: the docker-compose deployment (spec 07) contains a container
@@ -42,7 +45,7 @@ designed metadata:
 | Column renames/type changes between hops | Joins break | Schema evolution policy in specs 02/05 |
 | Iceberg snapshot expiration cuts version history | Lineage trail truncated | No expiration in POC; reconcile snapshot & Kafka retention |
 | Topic/table name drift across hops | Join failure | Single naming convention, enforced in spec 02 |
-| OpenLineage model does not fit CDC hop identity | Model mismatch | Evaluate extension vs. custom facets (kafkaOffset) |
+| OpenLineage model does not fit CDC hop identity | Model mismatch | RESOLVED (OQ2): logical `debezium:{connector}` maps to the emitted physical job (`debezium.shop-orders:mysql.0`); no custom facet needed |
 | **Version drift across images/jars** (Airflow, Spark, Iceberg, Nessie) | Stack breaks | Pin every image and jar tag in spec 07 |
 | **Spark ↔ Confluent Avro deserialization** | Wrong/none data | confluent_from_avro UDF; registry reachable from Spark |
 | **runId correlation Airflow ↔ Spark** | Parent/child join fails | parentJobName/parentRunId injection; fallback = read app id from operator |
@@ -52,7 +55,7 @@ designed metadata:
 | **Deletes silently dropped** (`op='d'` filtered in Spark apps) | Iceberg diverges from MySQL | Accepted scope cut (OQ11 RESOLVED); tombstone/delete propagation deferred beyond the POC |
 | **confluent_from_avro precision claim** (OQ5) | Exactness overclaimed through an opaque UDF | RESOLVED (OQ5): inferred until proven by the OL listener |
 | **Nessie healthcheck assumes bash** (`/dev/tcp`) | Healthcheck fails if the image lacks bash | Validate at bring-up; fall back to a TCP-only check if needed |
-| **Binlog position not emitted as lineage** | Version-marker chain starts at Kafka offset | Documented limitation; Debezium `source` info is in the envelope for later use |
+| **Binlog position not emitted as lineage** | Source-leg markers (binlog position, Kafka offset) stay in the Debezium envelope / broker state, not in OL events | Documented limitation; Debezium `source` info is in the envelope for later use |
 | **Nessie commit-hash / writer-metadata facets unimplemented** | Spec 05 promises metadata no artifact captures | DEFERRED (review D9): spec 05 §5 annotated as deferred — not captured by any POC artifact; revisit when a sink exists |
 | **Debezium OpenLineage integration is new (3.6)** — SMT × Avro-converter schema representation | Marquez schema facet may differ from the registry subject | Validate at bring-up; the registry subject stays the lineage schema facet (spec 02) |
 | **Marquez image healthchecks assume bash** (`/dev/tcp`) | Healthcheck fails if the image lacks bash | Validate at bring-up; fall back to a TCP-only check |
@@ -60,7 +63,7 @@ designed metadata:
 | **CDC job identity derived from topic.prefix+task** (`mysql.0`) | Job collision across connectors | Per-connector `openlineage.integration.job.namespace` (`debezium.shop-orders` / `debezium.shop-customers`) — spec 02/03 |
 | **Spark-emitted Iceberg dataset identity vs logical identity** (`nessie.poc`/`shop_orders` vs `poc`/`shop_orders`) | Sink-side join fails in Marquez (Airflow outlet != Spark output) | RESOLVED (OQ12): catalog-qualified identity is physical; Airflow outlets align to it (T-03); validate at bring-up |
 | **Snapshot id not attached to an OL event** (lives in Airflow XCom/log only) | Version-marker chain does not visibly close inside Marquez | RESOLVED (OQ13): chain closes across Marquez events + Airflow run metadata via the parentRun facet; OL-event attachment is future work; validate at bring-up |
-| **`kafkaOffset` facet is a degenerate `[0, end]` range** (review P2) | The marker does not advance — `startingOffsets=earliest` / `endingOffsets=latest` re-reads the full topic every run, so the facet is a constant cumulative re-scan | ACCEPTED for the POC: documented as a cumulative re-scan (spec 02 version markers); moving to checkpointed offsets is future work |
+| **`kafkaOffset` facet is not emitted** (review P2) | openlineage-spark 1.52.0 has no `kafkaOffset` facet class or string in the jar — the `KafkaRelationVisitor` extracts only topic + bootstrap servers for dataset identity, so no offset-range facet is emitted on the Kafka→Spark leg | ACCEPTED for the POC: the Kafka offset marker lives in the Debezium envelope / broker state, and the version-marker chain closes via the Iceberg snapshot id (`capture_snapshot` XCom) + the `parentRun` facet (OQ13); emitting offset facets is future work |
 
 ## Open questions
 
@@ -68,8 +71,9 @@ designed metadata:
    POC?~~
    RESOLVED: Marquez is the POC's central OpenLineage store; all three hops (Debezium
    CDC, Airflow parent runs, Spark child runs) emit to it. Per-hop metadata remains the
-   fallback for facets Marquez does not render (e.g. `kafkaOffset`), but Marquez is the
-   join point (spec 02).
+   fallback for lineage markers no OL event carries — the binlog position and Kafka
+   offset (Debezium envelope / broker state) and the Iceberg snapshot id (Airflow run
+   metadata, OQ13) — but Marquez is the join point (spec 02).
 2. ~~How much of **OpenLineage** do we adopt vs. extend for the CDC hop identity?~~
    RESOLVED: Debezium 3.6 emits OpenLineage natively; the model maps logical
    `debezium:{connector}` to the emitted `debezium.{connector}:{topic.prefix}.{task_id}`
@@ -140,11 +144,12 @@ designed metadata:
     read-back task and recorded in Airflow run metadata (XCom/log) as the output version
     marker; attaching it to an OL event (custom facet on the Airflow task COMPLETE or
     the Spark run's output dataset) is future work, not a POC requirement. The chain
-    closes via the `kafkaOffset` facet (Marquez) + the snapshot id (Airflow run
-    metadata), joined by the `parentRun` facet — mirroring the binlog-position
-    precedent (documented limitation, stays outside OL events). Spec 02's version-marker
-    rule amended accordingly; spec 04 §3's "attaches it as the output version
-    marker" wording is a follow-up for airflow-expert (T-04).
+    closes via the snapshot id (Airflow run metadata) joined by the `parentRun` facet;
+    openlineage-spark 1.52.0 emits no `kafkaOffset` facet (review P2), so the Kafka
+    offset marker — like the binlog position — lives in the Debezium envelope / broker
+    state, outside OL events (documented limitation). Spec 02's version-marker rule
+    amended accordingly; spec 04 §3's "attaches it as the output version marker"
+    wording is a follow-up for airflow-expert (T-04).
 
 ## Follow-up tickets
 
@@ -193,3 +198,13 @@ designed metadata:
   work. Spec 02 version-marker rule amended: the chain closes across Marquez events +
   Airflow run metadata via the parentRun facet, not inside Marquez alone. Follow-up T-04
   (spec 04 §3 wording); risk row added.
+- 2026-09-09: corrected two claims after runtime verification (jar inspection of
+  openlineage-spark 1.52.0): (1) no `kafkaOffset` facet is emitted — the review P2 risk
+  row is rewritten from a "degenerate `[0, end]` range" to "not emitted"; success
+  criterion 4, the binlog-position risk impact, the CDC-identity risk mitigation (now
+  RESOLVED via OQ2), OQ1, and OQ13 wording updated so the Kafka offset marker lives in
+  the Debezium envelope / broker state and the chain closes via the Iceberg snapshot id
+  + `parentRun` facet. (2) MERGE INTO column lineage shows IDENTITY/DIRECT from the
+  re-read target table input, not the SELECT expression — reflected in spec 07 runbook
+  step 10 and specs 04/05. Spec 02 facet/version-marker wording still lists
+  `kafkaOffset`; flagged for lineage-designer.

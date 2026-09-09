@@ -17,7 +17,11 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
 - Schema = event schema from Kafka, mapped 1:1 back to MySQL columns (names preserved).
 - Note: the POC's `poc.shop_orders` also carries ONE derived column
   (`total_price = quantity * unit_price`) computed in the Spark transform — this is the
-  exact-column-lineage demo (spec 02/04); all other columns map 1:1.
+  column-lineage demo (spec 02/04); all other columns map 1:1. Caveat: because the
+  write is a MERGE INTO, the openlineage-spark listener attributes output columns as
+  IDENTITY/DIRECT from the re-read target table input, so the facet shows `total_price`
+  as IDENTITY from `s3://poc-warehouse/poc/shop_orders`, not the expression (listener
+  limitation; the facet is present and complete — spec 07 runbook step 10).
 - Schema evolution: expect additive changes; column renames must be coordinated with
   the lineage model (they break joins if unmanaged).
 

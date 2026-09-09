@@ -46,8 +46,10 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
   `currentSnapshot().snapshotId()` via pyiceberg and records it in Airflow run
   metadata (XCom/log) as the output version marker. The snapshot id is **not**
   attached to an OpenLineage event in the POC (OQ13 RESOLVED, spec 02/06): the chain
-  closes via the `kafkaOffset` facet (Marquez) + the snapshot id (Airflow run
-  metadata), joined by the `parentRun` facet.
+  closes via the snapshot id (Airflow run metadata) joined by the `parentRun` facet.
+  openlineage-spark 1.52.0 emits no `kafkaOffset` facet (review P2, spec 06), so the
+  Kafka offset marker stays in the Debezium envelope / broker state, mirroring the
+  binlog-position limitation.
 
 ### 4. Transformation visibility
 
@@ -59,6 +61,12 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
 
 - The POC treats **pure Spark SQL transforms as exact** and anything else as inferred.
 - **Absence of a columnLineage facet = inferred, never exact** (spec 02 rule).
+- **MERGE INTO caveat (review P2, spec 06/07):** the POC writes are `MERGE INTO`, and
+  the openlineage-spark 1.52.0 listener attributes output columns to the re-read
+  target table input as IDENTITY/DIRECT — `total_price` shows IDENTITY from
+  `s3://poc-warehouse/poc/shop_orders`, not the `quantity * unit_price` expression.
+  The `columnLineage` facet is still present and complete; the expression is not
+  surfaced (listener limitation for MERGE INTO).
 
 ### 5. Dataset declaration (input + output)
 
