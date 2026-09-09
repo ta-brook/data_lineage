@@ -1,8 +1,9 @@
 # 00 — POC Overview
 
-**Status:** Draft
+**Status:** Draft (design); **execution phase complete** — the stack is brought up and
+verified end-to-end (Avro + JSON paths) as of 2026-09-09; see `README.md` and `STATE.md`.
 **Owner:** Data Platform team
-**Last updated:** 2026-09-04
+**Last updated:** 2026-09-09
 
 ## Purpose
 
@@ -19,7 +20,7 @@ into a final Iceberg column — and at what precision?*
 
 The POC is **runnable**: every component is deployed as a Docker container via a single
 `docker-compose` stack, with sample DAGs, sample Spark apps, and provisioning scripts.
-The stack is authored but not executed or tested in this phase.
+The stack is executed and verified end-to-end (execution phase complete, 2026-09-09).
 
 ## Goals
 

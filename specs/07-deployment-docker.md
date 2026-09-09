@@ -19,15 +19,16 @@ specs 02 and 07.
 
 ## 1. Container inventory
 
-16 services. Images are pinned; custom images are built from the Dockerfiles in the
-repo root.
+16 services in the full stack (`docker-compose.yml`). The CDC-only compose
+(`docker-compose.cdc.yml`) additionally runs **`kafka-ui`** (Kafbat UI). Images are
+pinned; custom images are built from the Dockerfiles in the repo root.
 
 | # | Service | Image (pinned) | Purpose | Host port(s) | Internal port(s) | Volumes (named + bind) | Key env vars |
 |---|---|---|---|---|---|---|---|
-| 1 | `mysql` | `mysql:8.0` | Source OLTP DB; binlog source for CDC | 13306 | 3306 | `mysql-data:/var/lib/mysql`; `./provisioning/init-mysql.sql:/docker-entrypoint-initdb.d/01-init.sql:ro`; `./provisioning/cdc.cnf:/etc/mysql/conf.d/cdc.cnf:ro` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE=shop`, `MYSQL_USER` (default `poc`), `MYSQL_PASSWORD` |
+| 1 | `mysql` | `mysql:8.0` | Source OLTP DB; binlog source for CDC. **`command:` mysqld flags** (`--server-id=223344 --gtid-mode=ON --enforce-gtid-consistency=ON --binlog-format=ROW --binlog-row-image=FULL --binlog-expire-logs-seconds=604800`) because `cdc.cnf` is ignored on a Windows bind mount (world-writable); `gtid_mode=ON` enables the microsecond GTID commit timestamps Debezium uses for `source.ts_ms` (DBZ-7183) | 13306 | 3306 | `mysql-data:/var/lib/mysql`; `./provisioning/init-mysql.sql:/docker-entrypoint-initdb.d/01-init.sql:ro`; `./provisioning/cdc.cnf:/etc/mysql/conf.d/cdc.cnf:ro` | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE=shop`, `MYSQL_USER` (default `poc`), `MYSQL_PASSWORD` |
 | 2 | `kafka` | `confluentinc/cp-kafka:7.9.0` | KRaft broker + controller (no ZooKeeper); CDC topic store | 9092 | 9092 (PLAINTEXT), 9093 (controller), 29092 (PLAINTEXT_HOST) | `kafka-data:/var/lib/kafka/data` | `CLUSTER_ID`, `KAFKA_PROCESS_ROLES=broker,controller`, `KAFKA_ADVERTISED_LISTENERS`, `KAFKA_AUTO_CREATE_TOPICS_ENABLE=false`, `KAFKA_LOG_RETENTION_HOURS=168` |
 | 3 | `schema-registry` | `confluentinc/cp-schema-registry:7.9.0` | Avro schema registry; subjects `{topic}-key/-value` feed the lineage schema facet | 8081 | 8081 | — | `SCHEMA_REGISTRY_HOST_NAME=schema-registry`, `SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081`, `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092` |
-| 4 | `connect` | `data-lineage-poc/connect:3.6.2.Final` (build `Dockerfile.connect`) | Debezium MySQL source connectors (`shop-orders`, `shop-customers`); emits OpenLineage to Marquez | 8083 | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, `GROUP_ID=1`, storage topics, Avro converters, registry URL; `openlineage.integration.*` + SMT in connector config (spec 03) |
+| 4 | `connect` | `data-lineage-poc/connect:3.6.2.Final` (build `Dockerfile.connect`) | Debezium MySQL source connectors (`shop-orders`, `shop-customers` — Avro + OL; `shop-orders-json`, `shop-customers-json` — JsonConverter, OL disabled); Avro path emits OpenLineage to Marquez | 8083 | 8083 | — | `BOOTSTRAP_SERVERS=kafka:9092`, `GROUP_ID=1`, storage topics, Avro converters, registry URL; `openlineage.integration.*` + SMT in connector config (spec 03) |
 | 5 | `airflow-db` | `postgres:16` | Airflow metadata database | — | 5432 | `airflow-db-data:/var/lib/postgresql/data` | `POSTGRES_USER=airflow`, `POSTGRES_PASSWORD` (default `airflow`), `POSTGRES_DB=airflow` |
 | 6 | `airflow-webserver` | `data-lineage-poc/airflow:3.2.2` (build `Dockerfile.airflow`) | Airflow UI + REST (runs `airflow api-server`, Airflow 3 replacement for `webserver`); submits Spark apps (spark-submit client only) | 8080 | 8080 | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | `AIRFLOW__CORE__EXECUTOR=LocalExecutor`, `AIRFLOW__CORE__AUTH_MANAGER=FabAuthManager`, `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, `AIRFLOW__CORE__FERNET_KEY`, `AIRFLOW__API__SECRET_KEY`, `_AIRFLOW_DB_MIGRATE`, `AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077`, `AIRFLOW__OPENLINEAGE__TRANSPORT` |
 | 7 | `airflow-scheduler` | `data-lineage-poc/airflow:3.2.2` (build `Dockerfile.airflow`) | DAG parsing + task scheduling | — | — | `./dags:/opt/airflow/dags`; `./spark-apps:/opt/spark-apps` | same as webserver (compose anchor `*airflow-env`) |
@@ -36,10 +37,11 @@ repo root.
 | 10 | `nessie` | `ghcr.io/projectnessie/nessie:0.108.4` (GHCR, not Docker Hub) | Iceberg catalog (versioned REST catalog) | 19120 | 19120 | `nessie-data:/data` | `NESSIE_VERSION_STORE_TYPE=ROCKSDB`, `NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DB_PATH=/data/nessie` |
 | 11 | `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | S3-compatible object storage; Iceberg warehouse | 9000 (S3), 9002 (console) | 9000 (S3), 9001 (console) | `minio-data:/data` | `MINIO_ROOT_USER` (default `pocadmin`), `MINIO_ROOT_PASSWORD` |
 | 12 | `mc` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` (pinned D4) | **One-shot** gate: creates bucket `poc-warehouse` | — | — | `./provisioning/mc-init.sh:/provisioning/mc-init.sh:ro` | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` |
-| 13 | `provision` | `curlimages/curl:8.10.1` | **One-shot** gate: registers connectors `shop-orders` / `shop-customers` via Connect REST | — | — | `./provisioning/register-connectors.sh:/provisioning/register-connectors.sh:ro` | — |
+| 13 | `provision` | `curlimages/curl:8.10.1` | **One-shot** gate: registers the four connectors (`shop-orders`, `shop-customers`, `shop-orders-json`, `shop-customers-json`) via Connect REST | — | — | `./provisioning/register-connectors.sh:/provisioning/register-connectors.sh:ro` | — |
 | 14 | `marquez-db` | `postgres:14` | OpenLineage backend metadata DB | — | 5432 | `marquez-db-data:/var/lib/postgresql/data`; `./provisioning/init-marquez.sql:/docker-entrypoint-initdb.d/01-marquez.sql:ro` | `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD=marquez` |
 | 15 | `marquez` | `marquezproject/marquez:0.50.0` | OpenLineage backend (collects OL events; Debezium posts here) | 5000 (API), 5001 (admin) | 5000 (API), 5001 (admin) | — | `MARQUEZ_PORT=5000`, `MARQUEZ_ADMIN_PORT=5001`, `POSTGRES_HOST=marquez-db`, `POSTGRES_DB=marquez`, `POSTGRES_USER=marquez`, `POSTGRES_PASSWORD=marquez` |
 | 16 | `marquez-web` | `marquezproject/marquez-web:0.50.0` | Marquez UI (lineage graph) | 3000 | 3000 | — | `MARQUEZ_HOST=marquez`, `MARQUEZ_PORT=5000` |
+| 17 | `kafka-ui` (CDC-only) | `ghcr.io/kafbat/kafka-ui:latest` | Kafbat UI: browse Debezium topics + decode Confluent Avro via Schema Registry; inspect Connect connectors | 8090 | 8080 | — | `KAFKA_CLUSTERS_0_NAME=poc`, `KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092`, `KAFKA_CLUSTERS_0_SCHEMAREGISTRY=http://schema-registry:8081`, `KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME/ADDRESS` |
 
 Notes:
 
@@ -168,6 +170,7 @@ deploy-mode cluster.
 | marquez | 5000 | 5000 | OpenLineage API (Debezium posts OL events) |
 | marquez | 5001 | 5001 | Marquez admin (/healthcheck) |
 | marquez-web | 3000 | 3000 | Marquez UI (lineage graph) |
+| kafka-ui | 8090 | 8080 | Kafbat UI (CDC-only compose) |
 
 **This table resolves the 8080/8081/8083/9000/9001/9002 collision set:**
 

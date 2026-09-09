@@ -14,6 +14,9 @@ Kafka and writes Iceberg. Includes the Docker containers for this hop.
 
 - One DAG per logical dataset (mirrors topic-per-table): submits a Spark app that
   consumes `mysql.{db}.{table}` and produces `poc.{dataset}` in Iceberg.
+- A **JSON-format DAG pair** (`load_orders_json`, `load_customers_json`) mirrors each
+  Avro DAG against the JSON topics (`mysqljson.shop.*`) and JSON Iceberg tables
+  (`poc.shop_*_json`); the Spark apps use `from_json` instead of the Avro UDF (spec 03 §3).
 - DAG identity: `{dag_id}.{task_id}` (the lineage **parent** job).
 - Example DAG: `load_orders` → task `spark_load_orders` (SparkSubmitOperator) →
   task `capture_snapshot` (pyiceberg read-back).

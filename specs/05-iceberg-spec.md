@@ -14,6 +14,10 @@ Design of `Spark → Iceberg` landing, including the Docker containers for this 
 
 - **Table-per-topic** (mirrors topic-per-table): each Kafka topic lands in one Iceberg
   table.
+- The JSON-format path lands in parallel tables `nessie.poc.shop_orders_json` /
+  `shop_customers_json` (same schema as `shop_orders` / `shop_customers`; the derived
+  `total_price` column is also computed there), so the Avro and JSON pipelines coexist
+  (spec 03 §3).
 - Schema = event schema from Kafka, mapped 1:1 back to MySQL columns (names preserved).
 - Note: the POC's `poc.shop_orders` also carries ONE derived column
   (`total_price = quantity * unit_price`) computed in the Spark transform — this is the
