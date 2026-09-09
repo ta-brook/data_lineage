@@ -103,6 +103,16 @@ backend) so MySQL -> Kafka lineage is visible end-to-end.
   `openlineage.integration.dataset.kafka.bootstrap.servers=kafka:9092`,
   `transforms=openlineage`,
   `transforms.openlineage.type=io.debezium.transforms.openlineage.OpenLineage`.
+- **Schema-history topics (CDC-02):** each connector uses its **own** Kafka
+  schema-history topic so the two connectors never cross-talk:
+  `schema.history.internal.kafka.topic=mysql-schema-history-orders` (shop-orders)
+  and `mysql-schema-history-customers` (shop-customers), both with
+  `schema.history.internal.kafka.bootstrap.servers=kafka:9092`. The shared
+  `mysql-schema-history` topic is **not** used — sharing it made the orders
+  connector's OpenLineage SMT see customers schemas, so it emitted OUTPUT
+  `mysql.shop.customers` (wrong) and never `mysql.shop.orders`, and no
+  `debezium.shop-customers` job appeared. Isolating the history topics removes
+  that cross-talk.
 
 ## Container deployment (docker-compose)
 
@@ -138,6 +148,7 @@ backend) so MySQL -> Kafka lineage is visible end-to-end.
 - `provision` container: `POST /connectors` to `http://connect:8083/connectors` with
   the `shop-orders` and `shop-customers` connector JSON (Avro converters,
   `topic.prefix=mysql`, `snapshot.mode=initial`, `tombstones.on.delete=true`,
+  per-connector schema-history topics `mysql-schema-history-{orders|customers}`,
   OpenLineage integration enabled - see section 6).
 
 ### Validation in the running stack

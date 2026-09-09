@@ -262,7 +262,18 @@ Two one-shot gates:
    `shop-orders` (topic `mysql.shop.orders`) and `shop-customers` (topic
    `mysql.shop.customers`), Avro converters, `topic.prefix=mysql`,
    `snapshot.mode=initial`, `tombstones.on.delete=true`, `database.server.id`
-   223345/223346 (≠ MySQL `server-id` 223344 from `cdc.cnf`).
+   223345/223346 (≠ MySQL `server-id` 223344 from `cdc.cnf`). Each connector uses
+   its **own** schema-history topic (CDC-02): `mysql-schema-history-orders` /
+   `mysql-schema-history-customers` (see `provisioning/register-connectors.sh`).
+
+   **CDC-02 re-registration note (running stack):** `register-connectors.sh` only
+   POSTs new connectors (409 = already present), so on a stack that was brought up
+   before the CDC-02 fix the existing connectors keep their old shared
+   `mysql-schema-history` config. Applying the fix to a running stack requires
+   deleting + re-registering both connectors:
+   `curl -X DELETE http://localhost:8083/connectors/shop-orders` (and
+   `shop-customers`), then re-run the `provision` gate. On a **fresh bring-up** the
+   fix applies automatically.
 
 Notes:
 
@@ -307,7 +318,11 @@ curl http://localhost:8083/connectors/shop-orders/status
 
 # 5. Topics exist
 docker compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list
-#    expect: mysql.shop.orders, mysql.shop.customers, mysql-schema-history, connect-*
+#    expect: mysql.shop.orders, mysql.shop.customers,
+#            mysql-schema-history-orders, mysql-schema-history-customers,
+#            connect-*
+#    (CDC-02: each connector now uses its OWN schema-history topic; the shared
+#     mysql-schema-history topic no longer exists on a fresh bring-up.)
 
 # 6. PROVE DATA IS CAPTURED: insert a row into MySQL, read it back from the topic
 docker compose exec mysql sh -c \

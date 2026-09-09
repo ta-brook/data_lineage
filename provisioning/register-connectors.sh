@@ -50,6 +50,16 @@ echo "Connect is ready"
 # config (/kafka/openlineage.yml, HTTP transport to Marquez), sets the job
 # namespace/description/tags/owners, and attaches the OpenLineage SMT so the
 # output Kafka topics are emitted as lineage datasets.
+#
+# Per-connector schema-history topics (CDC-02): the two connectors previously
+# shared a single mysql-schema-history topic, which made the orders connector's
+# OpenLineage SMT see customers schemas too -> it emitted OUTPUT
+# mysql.shop.customers (wrong) and never mysql.shop.orders, and no
+# debezium.shop-customers job appeared. Isolating the history topics
+# (mysql-schema-history-orders / mysql-schema-history-customers) removes the
+# cross-talk. NOTE: this only takes effect on a FRESH bring-up or after deleting
+# + re-registering the connectors on a running stack (this script only POSTs;
+# 409 = already present, so existing connectors keep their old config).
 
 ORDERS_PAYLOAD='{
   "name": "shop-orders",
@@ -62,7 +72,7 @@ ORDERS_PAYLOAD='{
     "database.server.id": "223345",
     "database.include.list": "shop",
     "table.include.list": "shop.orders",
-    "schema.history.internal.kafka.topic": "mysql-schema-history",
+    "schema.history.internal.kafka.topic": "mysql-schema-history-orders",
     "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
     "snapshot.mode": "initial",
     "tombstones.on.delete": "true",
@@ -98,7 +108,7 @@ CUSTOMERS_PAYLOAD='{
     "database.server.id": "223346",
     "database.include.list": "shop",
     "table.include.list": "shop.customers",
-    "schema.history.internal.kafka.topic": "mysql-schema-history",
+    "schema.history.internal.kafka.topic": "mysql-schema-history-customers",
     "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
     "snapshot.mode": "initial",
     "tombstones.on.delete": "true",
