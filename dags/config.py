@@ -18,6 +18,11 @@ KAFKA_NAMESPACE = "kafka://kafka:9092"
 # Kafka topics (lineage input dataset names)
 TOPIC_ORDERS = "mysql.shop.orders"
 TOPIC_CUSTOMERS = "mysql.shop.customers"
+# JSON-format path (Debezium JsonConverter, payload-only): the same tables flow
+# through a second set of topics so the Avro (Schema Registry) and JSON ingest
+# paths coexist in the pipeline (spec 03).
+TOPIC_ORDERS_JSON = "mysqljson.shop.orders"
+TOPIC_CUSTOMERS_JSON = "mysqljson.shop.customers"
 
 # Nessie catalog (spec 05)
 NESSIE_URI = "http://nessie:19120/api/v2"
@@ -44,12 +49,16 @@ MINIO_SECRET_KEY = os.environ.get("MINIO_ROOT_PASSWORD", "minio-poc-secret")
 OUTPUT_NAMESPACE = "nessie.poc"
 OUTPUT_ORDERS = "poc.shop_orders"
 OUTPUT_CUSTOMERS = "poc.shop_customers"
+OUTPUT_ORDERS_JSON = "poc.shop_orders_json"
+OUTPUT_CUSTOMERS_JSON = "poc.shop_customers_json"
 
 # Spark (spec 04)
 SPARK_MASTER = "spark://spark-master:7077"
 SPARK_APP_DIR = "/opt/spark-apps"
 SPARK_APP_ORDERS = "/opt/spark-apps/load_orders.py"
 SPARK_APP_CUSTOMERS = "/opt/spark-apps/load_customers.py"
+SPARK_APP_ORDERS_JSON = "/opt/spark-apps/load_orders_json.py"
+SPARK_APP_CUSTOMERS_JSON = "/opt/spark-apps/load_customers_json.py"
 
 # Spark conf passed by the SparkSubmitOperator (client mode). Mirrors
 # spark-defaults.conf so the client-mode driver (running in the Airflow
