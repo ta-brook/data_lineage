@@ -54,6 +54,7 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 | Tickets EXE-01 (#1), CDC-01 (#2), EXE-02 (#11) CLOSED via sync-tickets.ps1 (board fully closed) | **DONE** |
 | **Kafbat Kafka UI added** (`docker-compose.cdc.yml`): `kafka-ui` service (ghcr.io/kafbat/kafka-ui) at http://localhost:8090, wired to cluster + Schema Registry. NOTE: the env var is `KAFKA_CLUSTERS_0_SCHEMAREGISTRY` — the `...URL` variant is silently ignored in Kafbat v1.5.0 (the Avro serde never registers, messages render as raw bytes). Message browser now decodes Debezium Confluent Avro | **DONE** |
 | **MySQL GTID source-timestamp precision (DBZ-7183) verified**: `source.ts_ms/ts_us` now carry microsecond GTID commit times (`source.ts_ns` micro-derived), `source.gtid` populated. Root cause: `gtid_mode=OFF` because `cdc.cnf` is ignored (world-writable Windows bind mount). Fix: mysql `command:` flags in BOTH compose files + connector offset reset/recreate. Verification report: `reports/mysql-gtid-timestamp-precision.{md,html}` | **DONE** |
+| **JSON-format pipeline path added** (parallel to Avro): connectors `shop-orders-json`/`shop-customers-json` (JsonConverter, `schemas.enable=false`, `decimal.handling.mode=string`) → topics `mysqljson.shop.orders`/`mysqljson.shop.customers`; Spark apps `load_orders_json`/`load_customers_json` (`from_json`, no registry) → Iceberg `poc.shop_orders_json`/`poc.shop_customers_json`; DAGs `load_orders_json`/`load_customers_json`. Verified end-to-end: DAGs SUCCESS, tables populated (orders 7 rows w/ correct `total_price`; customers 4 rows), Marquez shows kafka:// input datasets + `replace_data`/`create_table` output jobs. Files: `provisioning/register-connectors.sh`, `spark-apps/load_*_json.py`, `dags/load_*_json.py`, `dags/config.py` | **DONE** |
 
 ### Remaining work (next session — see Section 7)
 
@@ -266,7 +267,12 @@ correct; only the debezium-hop attribution is off.
 
 ### B. Optional follow-ups (not blockers)
 
-- Fix `cdc.cnf` file permissions is now OPTIONAL — the server-id/GTID/binlog settings are
+- **JSON path**: the Debezium OpenLineage hop is intentionally disabled on the JSON
+  connectors (emitter-cache cross-talk — the two JSON connectors share
+  `topic.prefix=mysqljson`); the JSON lineage is carried by the Airflow→Spark→Iceberg
+  hops. Concurrent DAG runs on the same Iceberg table can hit a transient
+  `ValidationException: Found conflicting files` MERGE conflict (retry resolves it).
+- `cdc.cnf` file-permission fix is now OPTIONAL — the server-id/GTID/binlog settings are
   applied via the mysql `command:` flags (2026-09-09). The stale file can be deleted or
   permission-fixed to match spec 03/07 exactly.
 - `runbook-testing.html` (repo root) still lists the shared `mysql-schema-history` topic

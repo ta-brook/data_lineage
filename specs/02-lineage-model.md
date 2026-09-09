@@ -20,6 +20,15 @@ across hops:
 | `orders` | `mysql://mysql:3306` / `shop.orders` | `kafka://kafka:9092` / `mysql.shop.orders` | `nessie.poc` / `shop_orders` |
 | `customers` | `mysql://mysql:3306` / `shop.customers` | `kafka://kafka:9092` / `mysql.shop.customers` | `nessie.poc` / `shop_customers` |
 
+**JSON-format path (parallel dataset set):** the same logical tables also flow through a
+second, JSON-encoded pipeline (spec 03 §3): Kafka datasets
+`kafka://kafka:9092` / `mysqljson.shop.orders` / `mysqljson.shop.customers` and Iceberg
+datasets `nessie.poc` / `shop_orders_json` / `shop_customers_json`. The identities
+follow the same conventions (topic name embeds the MySQL identity; Iceberg table = the
+logical name + `_json`). The JSON path reuses the Airflow→Spark→Iceberg hops
+(`airflow:load_orders_json`, `spark:load_orders_json`); the Debezium hop is not emitted
+for it (see spec 03 §3).
+
 Dataset identity fields: `namespace`, `name`, `schema` (column list), `version marker`.
 
 The MySQL and Kafka namespace/name pairs above are the **physical OpenLineage
