@@ -1,0 +1,71 @@
+flowchart LR
+    subgraph MYSQL["MySQL 8.0 — GTID binlog (ROW / FULL)"]
+        DB[(shop.orders<br/>shop.customers)]
+    end
+
+    subgraph DBZ["Debezium Connect 3.6"]
+        AVRO["shop-orders / shop-customers<br/>Avro converter + Schema Registry"]
+        JSONC["shop-orders-json / shop-customers-json<br/>JsonConverter, schemas.enable=false"]
+    end
+
+    subgraph KAFKA["Kafka KRaft + Schema Registry"]
+        T1["mysql.shop.orders / mysql.shop.customers"]
+        T2["mysqljson.shop.orders / mysqljson.shop.customers"]
+        SR["Schema Registry"]
+    end
+
+    subgraph AF["Airflow 3"]
+        D1["load_orders / load_customers"]
+        D2["load_orders_json / load_customers_json"]
+    end
+
+    subgraph SP["Spark 3.5"]
+        S1["load_orders.py / load_customers.py<br/>(confluent_from_avro UDF)"]
+        S2["load_orders_json.py / load_customers_json.py<br/>(from_json)"]
+    end
+
+    subgraph ICE["Iceberg — Nessie catalog + MinIO"]
+        I1["shop_orders / shop_customers"]
+        I2["shop_orders_json / shop_customers_json"]
+    end
+
+    subgraph OBS["Lineage + Observability"]
+        MQ["Marquez — OpenLineage sink + UI"]
+        KUI["Kafbat Kafka UI"]
+    end
+
+    DB -->|"CDC binlog + GTID (µs commit timestamps)"| AVRO
+    DB -->|"CDC binlog + GTID (µs commit timestamps)"| JSONC
+    AVRO -->|"Confluent Avro (magic byte + schema id)"| T1
+    JSONC -->|"payload-only JSON"| T2
+    AVRO -.->|"schema subject {topic}-value"| SR
+    T1 -->|"inlet"| D1
+    T2 -->|"inlet"| D2
+    D1 -->|"spark-submit (client)"| S1
+    D2 -->|"spark-submit (client)"| S2
+    S1 -->|"MERGE INTO → snapshot"| I1
+    S2 -->|"MERGE INTO → snapshot"| I2
+
+    AVRO -.->|"OpenLineage (debezium hop)"| MQ
+    D1 -.->|"OpenLineage"| MQ
+    D2 -.->|"OpenLineage"| MQ
+    S1 -.->|"OpenLineage (replace_data)"| MQ
+    S2 -.->|"OpenLineage (replace_data)"| MQ
+    KUI -.->|"browse / decode Avro"| T1
+    KUI -.->|"browse"| T2
+
+    classDef src fill:#1e88e5,stroke:#0d47a1,color:#fff
+    classDef cdc fill:#43a047,stroke:#1b5e20,color:#fff
+    classDef kaf fill:#fb8c00,stroke:#e65100,color:#fff
+    classDef air fill:#e53935,stroke:#b71c1c,color:#fff
+    classDef spk fill:#8e24aa,stroke:#4a148c,color:#fff
+    classDef ice fill:#00897b,stroke:#004d40,color:#fff
+    classDef obs fill:#546e7a,stroke:#263238,color:#fff
+
+    class DB src
+    class AVRO,JSONC cdc
+    class T1,T2,SR kaf
+    class D1,D2 air
+    class S1,S2 spk
+    class I1,I2 ice
+    class MQ,KUI obs
