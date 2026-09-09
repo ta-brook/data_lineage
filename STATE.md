@@ -52,6 +52,8 @@ pyiceberg REST catalog. Both DAGs = SUCCESS.
 | Marquez lineage chain verified: `debezium.shop-orders:mysql.0 → kafka://kafka:9092/mysql.shop.orders → airflow:load_orders.spark_load_orders (parent) → spark:load_orders (child) → replace_data → s3://poc-warehouse/poc/shop_orders_*`; columnLineage facet on replace_data output (all 9 fields); parent facet on spark run | **DONE** |
 | Stack healthy: 15 services up; connectors RUNNING; topics have data | **DONE** |
 | Tickets EXE-01 (#1), CDC-01 (#2), EXE-02 (#11) CLOSED via sync-tickets.ps1 (board fully closed) | **DONE** |
+| **Kafbat Kafka UI added** (`docker-compose.cdc.yml`): `kafka-ui` service (ghcr.io/kafbat/kafka-ui) at http://localhost:8090, wired to cluster + Schema Registry. NOTE: the env var is `KAFKA_CLUSTERS_0_SCHEMAREGISTRY` — the `...URL` variant is silently ignored in Kafbat v1.5.0 (the Avro serde never registers, messages render as raw bytes). Message browser now decodes Debezium Confluent Avro | **DONE** |
+| **MySQL GTID source-timestamp precision (DBZ-7183) verified**: `source.ts_ms/ts_us` now carry microsecond GTID commit times (`source.ts_ns` micro-derived), `source.gtid` populated. Root cause: `gtid_mode=OFF` because `cdc.cnf` is ignored (world-writable Windows bind mount). Fix: mysql `command:` flags in BOTH compose files + connector offset reset/recreate. Verification report: `reports/mysql-gtid-timestamp-precision.{md,html}` | **DONE** |
 
 ### Remaining work (next session — see Section 7)
 
@@ -214,9 +216,11 @@ Both DAGs run to **SUCCESS** end-to-end (verified 2026-09-08):
   `init()` NPEs on `context.config()==null` → tasks killed (observed + reverted). Real
   fixes: separate Connect worker per connector (separate JVM → separate static cache) or
   upstream Debezium fix. DBZ-2262 (dedup) is a separate, secondary SMT defect.
-- **`cdc.cnf` is ignored** (world-writable on the Windows bind mount → MySQL refuses it):
-  `server_id=1`, `gtid_mode=OFF` instead of spec's 223344/ON. CDC still works (binlog is
-  ON with ROW/FULL by default) but drifts from spec 03/07. Needs a file-permission fix.
+- **`cdc.cnf` is still ignored** (world-writable on the Windows bind mount → MySQL
+  refuses it). The settings that matter (server-id, GTID, binlog ROW/FULL, retention) are
+  now applied via the mysql `command:` flags in both compose files (2026-09-09);
+  `gtid_mode=ON` is verified. The file itself is redundant — keep `command:` and
+  `cdc.cnf` in sync if it is ever edited, or delete it.
 - **kafkaOffset facet NOT emitted** (openlineage-spark 1.52.0 has no such facet — jar
   verified). Spec 06 review P2 wording ("degenerate [0,end] range") is incorrect and must
   be corrected to "not emitted by the pinned agent; the Kafka offset marker is captured
@@ -262,8 +266,9 @@ correct; only the debezium-hop attribution is off.
 
 ### B. Optional follow-ups (not blockers)
 
-- Fix `cdc.cnf` file permissions (Windows bind mount world-writable) to restore
-  `server_id=223344` / `gtid_mode=ON` per spec 03/07.
+- Fix `cdc.cnf` file permissions is now OPTIONAL — the server-id/GTID/binlog settings are
+  applied via the mysql `command:` flags (2026-09-09). The stale file can be deleted or
+  permission-fixed to match spec 03/07 exactly.
 - `runbook-testing.html` (repo root) still lists the shared `mysql-schema-history` topic
   in step 4 — regenerate/clean up.
 - Latent `sync-tickets.ps1` bug: `New-Issue`/`Find-IssueNumber` assign `$t.github_number`
