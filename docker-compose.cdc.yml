@@ -3,7 +3,8 @@
 #
 # Slimmed-down stack to prove the CDC hop WITHOUT Airflow/Spark/Nessie/MinIO.
 # Services: mysql, kafka, schema-registry, connect, marquez-db, marquez,
-# marquez-web, provision (one-shot gate that registers the connectors).
+# marquez-web, provision (one-shot gate that registers the connectors),
+# kafka-ui (Kafbat UI for browsing Debezium topics/data).
 #
 # Project name matches the full stack (`data-lineage-poc`, the lineage
 # deployment facet instance_id) so volumes and the Marquez lineage store are
@@ -26,6 +27,10 @@ services:
     container_name: mysql
     ports:
       - "13306:3306" # host remap avoids local MySQL collisions
+    # mysqld flags replicate cdc.cnf (which Windows bind-mounts as world-writable
+    # and MySQL ignores). gtid_mode=ON is required for the microsecond-resolution
+    # GTID commit timestamps that Debezium 2.5+ (DBZ-7183) uses for source.ts_ms.
+    command: ["--server-id=223344", "--gtid-mode=ON", "--enforce-gtid-consistency=ON", "--binlog-format=ROW", "--binlog-row-image=FULL", "--binlog-expire-logs-seconds=604800"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: shop
@@ -118,6 +123,35 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [lineage-poc]
+
+  # Kafka UI (Kafbat UI — actively maintained kafka-ui fork): browse the Debezium
+  # topics and message payloads (Confluent Avro decoded via the Schema Registry),
+  # and inspect the Kafka Connect connectors. Host port 8090 -> container 8080
+  # (8080 on the host is already Airflow; 8081/8083 are Schema Registry/Connect).
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: poc
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://connect:8083
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      connect:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080'"]
       interval: 10s
       timeout: 5s
       retries: 30

@@ -30,6 +30,10 @@ services:
     container_name: mysql
     ports:
       - "13306:3306" # host remap avoids local MySQL collisions
+    # mysqld flags replicate cdc.cnf (which Windows bind-mounts as world-writable
+    # and MySQL ignores). gtid_mode=ON is required for the microsecond-resolution
+    # GTID commit timestamps that Debezium 2.5+ (DBZ-7183) uses for source.ts_ms.
+    command: ["--server-id=223344", "--gtid-mode=ON", "--enforce-gtid-consistency=ON", "--binlog-format=ROW", "--binlog-row-image=FULL", "--binlog-expire-logs-seconds=604800"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: shop

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MySQL GTID Source-Timestamp Precision (DBZ-7183) — Data Lineage POC</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; }
+  h1 { font-size: 1.5rem; border-bottom: 2px solid #999; padding-bottom: .4rem; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; border-bottom: 1px solid #ccc; padding-bottom: .2rem; }
+  code { background: rgba(127,127,127,.15); padding: .1em .35em; border-radius: 4px;
+         font-size: .9em; }
+  pre { background: rgba(127,127,127,.12); padding: .8rem; border-radius: 6px;
+        overflow-x: auto; font-size: .85em; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92em; }
+  th, td { border: 1px solid #aaa; padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: rgba(127,127,127,.18); }
+  .meta { color: #888; font-size: .9em; }
+  .verdict { border: 2px solid #2e7d32; background: rgba(46,125,50,.12); padding: .8rem 1rem;
+             border-radius: 6px; font-weight: 600; }
+  blockquote { border-left: 4px solid #999; margin-left: 0; padding-left: 1rem; color: #666; }
+</style>
+</head>
+<body>
+<h1>Data Lineage POC — MySQL GTID Source-Timestamp Precision (DBZ-7183) Verified</h1>
+<p class="meta"><strong>Author:</strong> debezium-expert &middot; <strong>Date:</strong> 2026-09-09</p>
+<p><strong>Scope:</strong> Debezium MySQL <code>source.ts_ms</code> /
+<code>source.ts_us</code> / <code>source.ts_ns</code> carried only <strong>second</strong>
+precision (zero-padded at micro/nano level). This report documents the root cause, the
+fix, and live verification that the fields now carry <strong>microsecond</strong>-resolution
+DB commit timestamps.</p>
+<p><strong>Method:</strong> live verification on the running CDC stack
+(<code>docker-compose.cdc.yml</code>). MySQL <code>8.0.46</code>, Debezium
+<code>3.6.2.Final</code>. A controlled <code>UPDATE shop.orders</code> was issued and the
+resulting binlog/GTID event was read back from the Kafka topic in readable JSON
+(a <code>JsonConverter</code> test connector).</p>
+
+<h2>0. Summary (verdict)</h2>
+<p class="verdict">RESOLVED.</p>
+<p>The zero-padding was <strong>not</strong> a MySQL version limitation. MySQL
+<code>8.0.46</code> already emits microsecond-resolution commit timestamps in
+<code>Gtid_log_event</code>s, and Debezium &ge; 2.5 already reads them for
+<code>source.ts_ms</code> (DBZ-7183). The missing prerequisite was
+<code>gtid_mode=ON</code>. It was <strong>OFF</strong> because
+<code>provisioning/cdc.cnf</code> is mounted as a world-writable Windows bind mount that
+MySQL silently refuses to read. With <code>gtid_mode=ON</code> applied via container
+command flags and the connector offsets reset, <code>source.ts_ms</code>/<code>ts_us</code>
+now carry the true microsecond commit time and <code>source.gtid</code> is populated.</p>
+<p><strong>No MySQL upgrade and no Debezium upgrade were required.</strong></p>
+
+<h2>1. The problem</h2>
+<p>The POC&rsquo;s Debezium MySQL connector emitted <code>source</code> timestamp blocks
+that were zero-padded:</p>
+<pre>{
+  "source": {
+    "ts_ms": 1788956491000,
+    "ts_us": 1788956491000000,
+    "ts_ns": 1788956491000000000,
+    "gtid": null, ...
+  }
+}</pre>
+<p><code>ts_us</code> was exactly <code>ts_ms * 1000</code> and <code>ts_ns</code> exactly
+<code>ts_ms * 1_000_000</code> — i.e. the underlying value had <strong>second</strong>
+precision only. The envelope <strong>top-level</strong> <code>ts_ms/us/ns</code>
+(connector <em>processing</em> time) already had true micro/nano precision; only the
+DB-event time was coarse.</p>
+
+<h2>2. Root cause</h2>
+<ol>
+<li><strong>MySQL binlog event-header timestamps are second-precision</strong> — a fixed
+format property of the MySQL binlog in every version.</li>
+<li><strong>MySQL 8.0.1+ adds microsecond commit timestamps to GTID events</strong>
+(<code>Gtid_log_event</code> carries <code>ORIGINAL_COMMIT_TIMESTAMP</code> /
+<code>IMMEDIATE_COMMIT_TIMESTAMP</code>). These only exist when
+<strong>GTID mode is enabled</strong> (<code>gtid_mode=ON</code>).</li>
+<li><strong>Debezium 2.5+ (DBZ-7183)</strong> reads those GTID commit timestamps for
+<code>source.ts_ms</code> <em>when GTID mode is detected at task start</em>; otherwise it
+falls back to the second-precision event-header timestamp.</li>
+<li>In this POC, <code>provisioning/cdc.cnf</code> (which sets <code>gtid_mode=ON</code>,
+<code>server-id=223344</code>, <code>binlog_format=ROW</code>, ...) is mounted from a
+Windows directory and ends up <strong>world-writable</strong>, which MySQL refuses &rarr;
+the file is <strong>ignored</strong>. MySQL ran with <code>gtid_mode=OFF</code>,
+<code>server_id=1</code>. No GTID events &rarr; no high-precision timestamps.</li>
+</ol>
+<p>The Debezium gating is a <strong>final field captured when the connector task starts</strong>
+(<code>isGtidModeEnabled = connection.isGtidModeEnabled()</code> in
+<code>BinlogStreamingChangeEventSource</code>), and the stored connector offset had no
+GTID. So simply flipping the MySQL flag is insufficient: the connector tasks must be
+restarted from a clean offset.</p>
+
+<h2>3. The fix</h2>
+<h3>3.1 Enable GTID via compose command flags (both compose files)</h3>
+<p><code>cdc.cnf</code> could not be made readable by MySQL on a Windows bind mount, so
+the settings were moved to mysqld command-line flags on the <code>mysql</code> service
+(command-line arguments always override config files):</p>
+<pre>command: ["--server-id=223344", "--gtid-mode=ON", "--enforce-gtid-consistency=ON",
+          "--binlog-format=ROW", "--binlog-row-image=FULL",
+          "--binlog-expire-logs-seconds=604800"]</pre>
+<ul>
+<li><code>docker-compose.yml</code> (full stack)</li>
+<li><code>docker-compose.cdc.yml</code> (CDC-only stack)</li>
+</ul>
+<p>The <code>mysql-data</code> named volume is untouched (data survived the recreate;
+binlog rolled to <code>binlog.000009</code>).</p>
+<h3>3.2 Reset connector offsets and re-create the connectors</h3>
+<p>The <code>shop-orders</code> / <code>shop-customers</code> / <code>shop-orders-json</code>
+tasks were constructed with GTID off and held offsets with no GTID. Restarting without a
+clean offset NPE&rsquo;d in the GTID-recovery path (<code>DumpBinaryLogGtidCommand</code>
+with a null <code>GtidSet</code>). Procedure:</p>
+<ol>
+<li><code>PUT /connectors/{name}/stop</code></li>
+<li><code>DELETE /connectors/{name}/offsets</code> (KIP-875)</li>
+<li><code>DELETE /connectors/{name}</code> then re-<code>POST</code> the config (fresh
+registration &rarr; clean snapshot &rarr; streams with GTID mode detected)</li>
+</ol>
+
+<h2>4. Verification (live)</h2>
+<p>Controlled <code>UPDATE shop.orders SET status='COMPLETED' WHERE order_id=1</code> with
+the MySQL commit window captured via <code>SELECT UNIX_TIMESTAMP(NOW(6))</code>:</p>
+<table>
+<tr><th></th><th>Before (GTID off)</th><th>After (GTID on)</th></tr>
+<tr><td>UPDATE window (MySQL <code>NOW(6)</code>)</td>
+    <td><code>1788956491.653724</code> &rarr; <code>.835007</code></td>
+    <td><code>1788957880.740294</code> &rarr; <code>.911041</code></td></tr>
+<tr><td><code>source.ts_ms</code></td>
+    <td><code>1788956491000</code> (second-padded)</td>
+    <td><strong><code>1788957880828</code></strong></td></tr>
+<tr><td><code>source.ts_us</code></td>
+    <td><code>1788956491000000</code> (padded)</td>
+    <td><strong><code>1788957880828740</code></strong></td></tr>
+<tr><td><code>source.ts_ns</code></td>
+    <td><code>1788956491000000000</code> (padded)</td>
+    <td><strong><code>1788957880828740000</code></strong></td></tr>
+<tr><td><code>source.gtid</code></td>
+    <td><em>(empty)</em></td>
+    <td><code>a09fc847-a9d7-11f1-970f-6a91a56cdfd9:2</code></td></tr>
+</table>
+<p>The GTID commit timestamp <code>1788957880.828740</code> falls <strong>inside</strong>
+the captured MySQL <code>NOW(6)</code> window, so <code>source.ts_ms</code>/<code>ts_us</code>
+are the true DB commit times.</p>
+
+<h2>5. Reproduction</h2>
+<pre># 1) Start the CDC stack
+docker compose -f docker-compose.cdc.yml up -d
+
+# 2) JSON-converter test connector (readable payloads) — registered via Connect REST:
+#    name=shop-orders-json, topic=mysqljson.shop.orders, JsonConverter,
+#    topic.prefix=mysqljson, openlineage.integration.enabled=false
+
+# 3) Capture the window, mutate, then read the last message
+docker exec mysql mysql -uroot -p&lt;rootpw&gt; -N -e "SELECT UNIX_TIMESTAMP(NOW(6));"
+docker exec mysql mysql -uroot -p&lt;rootpw&gt; -e "UPDATE shop.orders SET status='x' WHERE order_id=1;"
+docker exec mysql mysql -uroot -p&lt;rootpw&gt; -N -e "SELECT UNIX_TIMESTAMP(NOW(6));"
+
+docker exec kafka kafka-console-consumer --bootstrap-server localhost:9092 \
+  --topic mysqljson.shop.orders --from-beginning --max-messages 200 --timeout-ms 15000
+# last message: op="u", source.ts_ms/ts_us = GTID commit time, source.gtid set</pre>
+
+<h2>6. Caveats</h2>
+<ul>
+<li><strong><code>source.ts_ns</code> is microsecond-derived</strong> (ends in <code>000</code>):
+the GTID commit timestamp is microsecond-resolution, so nanoseconds are
+<code>ts_us * 1000</code>. Nanosecond-granularity DB event times do not exist in MySQL.</li>
+<li><strong>Snapshot records (<code>op="r"</code>) remain second/millisecond-precision</strong>:
+GTID microsecond timestamps apply to <strong>streamed</strong> binlog events
+(<code>op=c/u/d</code>), not snapshot reads. For a snapshot event, <code>source.ts_ms</code>
+is the snapshot execution time.</li>
+<li><strong><code>cdc.cnf</code> is still ignored</strong> (world-writable on Windows). The
+timing/CDC settings are now applied via the compose <code>command:</code>. The file can be
+removed or permission-fixed later; until then keep <code>command:</code> and
+<code>cdc.cnf</code> in sync if the file is edited.</li>
+<li><strong>Connector task restarts require a clean offset</strong> whenever GTID mode
+toggles: the GTID flag is captured at task construction and the stored offset must contain
+a GTID set for the recovery path to work.</li>
+</ul>
+
+<h2>7. Artifacts</h2>
+<ul>
+<li><code>docker-compose.yml</code>, <code>docker-compose.cdc.yml</code> — mysql
+<code>command:</code> flags (GTID + binlog)</li>
+<li><code>docker-compose.cdc.yml</code> — Kafbat UI (<code>kafka-ui</code>) service with
+Schema Registry wired (<code>KAFKA_CLUSTERS_0_SCHEMAREGISTRY</code>, not
+<code>...SCHEMAREGISTRYURL</code>) for Avro decoding in the message browser</li>
+<li>Kafka Connect (running state, config persisted in <code>connect-configs</code>):
+<code>shop-orders-json</code> JSON-converter test connector &rarr; <code>mysqljson.shop.orders</code></li>
+</ul>
+</body>
+</html>
