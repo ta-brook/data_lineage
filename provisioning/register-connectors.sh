@@ -7,6 +7,8 @@
 # lineage datasets from spec 02:
 #   shop-orders    -> mysql.shop.orders
 #   shop-customers -> mysql.shop.customers
+#   shop-orders-json    -> mysqljson.shop.orders    (JSON path, JsonConverter)
+#   shop-customers-json -> mysqljson.shop.customers (JSON path, JsonConverter)
 # Topic naming comes solely from topic.prefix (Debezium 3.x; database.server.name
 # was removed in 3.x). topic.prefix=mysql + database.include.list=shop +
 # table.include.list=<table> => mysql.{db}.{table}. Do not change these names;
@@ -133,7 +135,80 @@ CUSTOMERS_PAYLOAD='{
   }
 }'
 
+# --- JSON-format connectors (JSON path, spec 03) ----------------------------
+# Same source tables, JsonConverter with schemas.enable=false (payload-only JSON -
+# no schema blob), distinct topic.prefix=mysqljson -> mysqljson.shop.orders /
+# mysqljson.shop.customers. Distinct database.server.id (223347/223348) so they
+# register as independent replica clients, and per-connector schema-history topics
+# (CDC-02 pattern). openlineage.integration is disabled (see note above the
+# register_connector function).
+
+ORDERS_JSON_PAYLOAD='{
+  "name": "shop-orders-json",
+  "config": {
+    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+    "database.hostname": "mysql",
+    "database.port": "3306",
+    "database.user": "debezium",
+    "database.password": "debezium-poc",
+    "database.server.id": "223347",
+    "database.include.list": "shop",
+    "table.include.list": "shop.orders",
+    "schema.history.internal.kafka.topic": "mysql-schema-history-orders-json",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "snapshot.mode": "initial",
+    "tombstones.on.delete": "true",
+    "topic.creation.enable": "true",
+    "topic.creation.default.replication.factor": "1",
+    "topic.creation.default.partitions": "1",
+    "topic.creation.default.cleanup.policy": "delete",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false",
+    "decimal.handling.mode": "string",
+    "topic.prefix": "mysqljson",
+    "openlineage.integration.enabled": "false"
+  }
+}'
+
+CUSTOMERS_JSON_PAYLOAD='{
+  "name": "shop-customers-json",
+  "config": {
+    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+    "database.hostname": "mysql",
+    "database.port": "3306",
+    "database.user": "debezium",
+    "database.password": "debezium-poc",
+    "database.server.id": "223348",
+    "database.include.list": "shop",
+    "table.include.list": "shop.customers",
+    "schema.history.internal.kafka.topic": "mysql-schema-history-customers-json",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "snapshot.mode": "initial",
+    "tombstones.on.delete": "true",
+    "topic.creation.enable": "true",
+    "topic.creation.default.replication.factor": "1",
+    "topic.creation.default.partitions": "1",
+    "topic.creation.default.cleanup.policy": "delete",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false",
+    "decimal.handling.mode": "string",
+    "topic.prefix": "mysqljson",
+    "openlineage.integration.enabled": "false"
+  }
+}'
+
 # --- Register connectors ---------------------------------------------------
+# JSON-format connectors (spec 03 JSON path): JsonConverter with schemas.enable=false
+# (payload-only JSON, no schema blob). openlineage.integration is DISABLED on the
+# JSON connectors: the Debezium OpenLineage emitter's static cache is keyed by
+# {topic.prefix}:{taskId}; both JSON connectors share topic.prefix=mysqljson, so
+# enabling OL would reproduce the emitter-cache cross-talk (STATE.md Section 6).
+# The JSON path's lineage is carried by the Airflow -> Spark -> Iceberg hops
+# (input kafka://kafka:9092/mysqljson.shop.* -> nessie.poc:shop_*_json).
 register_connector() {
   name="$1"
   payload="$2"
@@ -153,6 +228,8 @@ register_connector() {
 failed=0
 register_connector "shop-orders" "$ORDERS_PAYLOAD" || failed=1
 register_connector "shop-customers" "$CUSTOMERS_PAYLOAD" || failed=1
+register_connector "shop-orders-json" "$ORDERS_JSON_PAYLOAD" || failed=1
+register_connector "shop-customers-json" "$CUSTOMERS_JSON_PAYLOAD" || failed=1
 
 if [ "$failed" -ne 0 ]; then
   echo "ERROR: one or more connectors failed to register" >&2

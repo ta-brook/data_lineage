@@ -43,6 +43,18 @@ Design of `MySQL → Debezium → Kafka`, including the Docker containers for th
   Confluent header (magic byte + schema id) and fetches the writer schema from the
   registry per record (see spec 04 / spark-apps).
 
+**JSON-format path (parallel):** the same source tables are ALSO captured by a second
+pair of connectors (`shop-orders-json` / `shop-customers-json`) using the Kafka Connect
+**JsonConverter** with `schemas.enable=false` (payload-only JSON, no schema blob) and
+`decimal.handling.mode=string` (so `DECIMAL` columns render as `"19.99"` — JsonConverter
+would otherwise serialize Connect decimals as base64 bytes). Topics use
+`topic.prefix=mysqljson` → `mysqljson.shop.orders` / `mysqljson.shop.customers`. Spark
+parses the envelope with the built-in `from_json` (no registry dependency). The
+OpenLineage integration is **disabled** on the JSON connectors: the Debezium emitter's
+static cache is keyed by `{topic.prefix}:{taskId}`, and both JSON connectors share
+`topic.prefix=mysqljson`, which would reproduce the emitter cross-talk (STATE.md §6). The
+JSON path's lineage is carried by the Airflow→Spark→Iceberg hops only.
+
 ### 4. Identity and naming
 
 | Entity | Convention | Example |
